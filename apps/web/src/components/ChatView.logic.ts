@@ -3,6 +3,7 @@ import {
   isProviderDriverKind,
   ProjectId,
   type ModelSelection,
+  PROVIDER_SEND_TURN_MAX_INPUT_CHARS,
   type ProviderDriverKind,
   type ServerProvider,
   type ScopedThreadRef,
@@ -209,6 +210,49 @@ export function cloneComposerImageForRetry(
   }
 }
 
+export const COMPOSER_INPUT_LIMIT_WARNING_RATIO = 0.9;
+
+const composerInputLimitFormatter = new Intl.NumberFormat("en-US");
+
+function characterNoun(count: number): string {
+  return count === 1 ? "character" : "characters";
+}
+
+export function formatComposerInputLimitCount(value: number): string {
+  return composerInputLimitFormatter.format(Math.max(0, Math.floor(value)));
+}
+
+export function formatComposerInputLimitUsage(inputCharCount: number): string {
+  return `${formatComposerInputLimitCount(inputCharCount)} / ${formatComposerInputLimitCount(
+    PROVIDER_SEND_TURN_MAX_INPUT_CHARS,
+  )} characters`;
+}
+
+export function formatComposerInputLimitExceededMessage(inputCharsOverLimit: number): string {
+  return `Message is ${formatComposerInputLimitCount(inputCharsOverLimit)} ${characterNoun(
+    inputCharsOverLimit,
+  )} over the ${formatComposerInputLimitCount(
+    PROVIDER_SEND_TURN_MAX_INPUT_CHARS,
+  )} character limit.`;
+}
+
+export function deriveComposerInputLimitState(input: string): {
+  inputCharCount: number;
+  inputCharsOverLimit: number;
+  isInputNearLimit: boolean;
+  isInputOverLimit: boolean;
+} {
+  const inputCharCount = input.trim().length;
+  const inputCharsOverLimit = Math.max(0, inputCharCount - PROVIDER_SEND_TURN_MAX_INPUT_CHARS);
+  return {
+    inputCharCount,
+    inputCharsOverLimit,
+    isInputNearLimit:
+      inputCharCount >= PROVIDER_SEND_TURN_MAX_INPUT_CHARS * COMPOSER_INPUT_LIMIT_WARNING_RATIO,
+    isInputOverLimit: inputCharsOverLimit > 0,
+  };
+}
+
 export function deriveComposerSendState(options: {
   prompt: string;
   imageCount: number;
@@ -223,9 +267,14 @@ export function deriveComposerSendState(options: {
   trimmedPrompt: string;
   sendableTerminalContexts: TerminalContextDraft[];
   expiredTerminalContextCount: number;
+  inputCharCount: number;
+  inputCharsOverLimit: number;
+  isInputNearLimit: boolean;
+  isInputOverLimit: boolean;
   hasSendableContent: boolean;
 } {
   const trimmedPrompt = stripInlineTerminalContextPlaceholders(options.prompt).trim();
+  const inputLimitState = deriveComposerInputLimitState(trimmedPrompt);
   const sendableTerminalContexts = filterTerminalContextsWithText(options.terminalContexts);
   const expiredTerminalContextCount =
     options.terminalContexts.length - sendableTerminalContexts.length;
@@ -234,6 +283,7 @@ export function deriveComposerSendState(options: {
     trimmedPrompt,
     sendableTerminalContexts,
     expiredTerminalContextCount,
+    ...inputLimitState,
     hasSendableContent:
       trimmedPrompt.length > 0 ||
       options.imageCount > 0 ||

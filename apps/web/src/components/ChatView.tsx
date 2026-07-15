@@ -219,7 +219,9 @@ import {
   buildThreadTurnInterruptInput,
   collectUserMessageBlobPreviewUrls,
   createLocalDispatchSnapshot,
+  deriveComposerInputLimitState,
   deriveComposerSendState,
+  formatComposerInputLimitExceededMessage,
   hasServerAcknowledgedLocalDispatch,
   getStartedThreadModelChangeBlockReason,
   LAST_INVOKED_SCRIPT_BY_PROJECT_KEY,
@@ -3980,9 +3982,6 @@ function ChatViewContent(props: ChatViewProps) {
       return;
     }
 
-    sendInFlightRef.current = true;
-    beginLocalDispatch({ preparingWorktree: Boolean(baseBranchForWorktree) });
-
     const composerImagesSnapshot = [...composerImages];
     const composerTerminalContextsSnapshot = [...sendableComposerTerminalContexts];
     const composerElementContextsSnapshot = [...composerElementContexts];
@@ -4009,6 +4008,18 @@ function ChatViewContent(props: ChatViewProps) {
       effort: ctxSelectedPromptEffort,
       text: messageTextForSend || IMAGE_ONLY_BOOTSTRAP_PROMPT,
     });
+    const outgoingInputLimitState = deriveComposerInputLimitState(outgoingMessageText);
+    if (outgoingInputLimitState.isInputOverLimit) {
+      setThreadError(
+        threadIdForSend,
+        formatComposerInputLimitExceededMessage(outgoingInputLimitState.inputCharsOverLimit),
+      );
+      return;
+    }
+
+    sendInFlightRef.current = true;
+    beginLocalDispatch({ preparingWorktree: Boolean(baseBranchForWorktree) });
+
     const turnAttachmentsPromise = Promise.all(
       composerImagesSnapshot.map(async (image) => ({
         type: "image" as const,
@@ -4460,6 +4471,14 @@ function ChatViewContent(props: ChatViewProps) {
         effort: ctxSelectedPromptEffort,
         text: trimmed,
       });
+      const outgoingInputLimitState = deriveComposerInputLimitState(outgoingMessageText);
+      if (outgoingInputLimitState.isInputOverLimit) {
+        setThreadError(
+          threadIdForSend,
+          formatComposerInputLimitExceededMessage(outgoingInputLimitState.inputCharsOverLimit),
+        );
+        return;
+      }
 
       sendInFlightRef.current = true;
       beginLocalDispatch({ preparingWorktree: false });

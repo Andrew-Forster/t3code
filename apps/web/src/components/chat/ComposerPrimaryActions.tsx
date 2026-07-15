@@ -24,6 +24,7 @@ interface ComposerPrimaryActionsProps {
   isEnvironmentUnavailable: boolean;
   isPreparingWorktree: boolean;
   hasSendableContent: boolean;
+  sendDisabledReason?: string | null;
   preserveComposerFocusOnPointerDown?: boolean;
   onPreviousPendingQuestion: () => void;
   onInterrupt: () => void;
@@ -63,6 +64,7 @@ export const ComposerPrimaryActions = memo(function ComposerPrimaryActions({
   isEnvironmentUnavailable,
   isPreparingWorktree,
   hasSendableContent,
+  sendDisabledReason = null,
   preserveComposerFocusOnPointerDown = false,
   onPreviousPendingQuestion,
   onInterrupt,
@@ -71,6 +73,7 @@ export const ComposerPrimaryActions = memo(function ComposerPrimaryActions({
   const pointerFocusProps = preserveComposerFocusOnPointerDown
     ? { onPointerDown: preventPointerFocus }
     : undefined;
+  const isSendDisabledByInputLimit = sendDisabledReason !== null;
 
   if (pendingAction) {
     return (
@@ -147,7 +150,10 @@ export const ComposerPrimaryActions = memo(function ComposerPrimaryActions({
           size="sm"
           className={cn("rounded-full", compact ? "h-9 px-3 sm:h-8" : "h-9 px-4 sm:h-8")}
           {...pointerFocusProps}
-          disabled={isSendBusy || isConnecting || isEnvironmentUnavailable}
+          disabled={
+            isSendBusy || isConnecting || isEnvironmentUnavailable || isSendDisabledByInputLimit
+          }
+          title={sendDisabledReason ?? undefined}
         >
           {isConnecting || isSendBusy ? "Sending..." : "Refine"}
         </Button>
@@ -161,7 +167,10 @@ export const ComposerPrimaryActions = memo(function ComposerPrimaryActions({
           size="sm"
           className="h-9 rounded-l-full rounded-r-none px-4 sm:h-8"
           {...pointerFocusProps}
-          disabled={isSendBusy || isConnecting || isEnvironmentUnavailable}
+          disabled={
+            isSendBusy || isConnecting || isEnvironmentUnavailable || isSendDisabledByInputLimit
+          }
+          title={sendDisabledReason ?? undefined}
         >
           {isConnecting || isSendBusy ? "Sending..." : "Implement"}
         </Button>
@@ -174,7 +183,13 @@ export const ComposerPrimaryActions = memo(function ComposerPrimaryActions({
                 className="h-9 rounded-l-none rounded-r-full border-l-white/12 px-2 sm:h-8"
                 aria-label="Implementation actions"
                 {...pointerFocusProps}
-                disabled={isSendBusy || isConnecting || isEnvironmentUnavailable}
+                disabled={
+                  isSendBusy ||
+                  isConnecting ||
+                  isEnvironmentUnavailable ||
+                  isSendDisabledByInputLimit
+                }
+                title={sendDisabledReason ?? undefined}
               />
             }
           >
@@ -182,7 +197,9 @@ export const ComposerPrimaryActions = memo(function ComposerPrimaryActions({
           </MenuTrigger>
           <MenuPopup align="end" side="top">
             <MenuItem
-              disabled={isSendBusy || isConnecting || isEnvironmentUnavailable}
+              disabled={
+                isSendBusy || isConnecting || isEnvironmentUnavailable || isSendDisabledByInputLimit
+              }
               onClick={() => void onImplementPlanInNewThread()}
             >
               Implement in a new thread
@@ -198,7 +215,14 @@ export const ComposerPrimaryActions = memo(function ComposerPrimaryActions({
       type="submit"
       className="flex h-9 w-9 enabled:cursor-pointer items-center justify-center rounded-full bg-primary/90 text-primary-foreground shadow-xs enabled:shadow-primary/24 enabled:inset-shadow-[0_1px_--theme(--color-white/16%)] transition-all duration-150 hover:bg-primary hover:scale-105 active:inset-shadow-[0_1px_--theme(--color-black/8%)] active:shadow-none disabled:pointer-events-none disabled:opacity-30 disabled:shadow-none disabled:hover:scale-100 sm:h-8 sm:w-8"
       {...pointerFocusProps}
-      disabled={isSendBusy || isConnecting || isEnvironmentUnavailable || !hasSendableContent}
+      disabled={
+        isSendBusy ||
+        isConnecting ||
+        isEnvironmentUnavailable ||
+        isSendDisabledByInputLimit ||
+        !hasSendableContent
+      }
+      title={sendDisabledReason ?? undefined}
       aria-label={
         isEnvironmentUnavailable
           ? "Environment disconnected"
@@ -208,7 +232,7 @@ export const ComposerPrimaryActions = memo(function ComposerPrimaryActions({
               ? "Preparing worktree"
               : isSendBusy
                 ? "Sending"
-                : "Send message"
+                : (sendDisabledReason ?? "Send message")
       }
     >
       {isConnecting || isSendBusy ? (

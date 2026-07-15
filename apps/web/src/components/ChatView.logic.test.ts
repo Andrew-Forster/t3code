@@ -1,4 +1,11 @@
-import { EnvironmentId, ProjectId, ProviderInstanceId, ThreadId, TurnId } from "@t3tools/contracts";
+import {
+  EnvironmentId,
+  ProjectId,
+  ProviderInstanceId,
+  PROVIDER_SEND_TURN_MAX_INPUT_CHARS,
+  ThreadId,
+  TurnId,
+} from "@t3tools/contracts";
 import { describe, expect, it } from "vite-plus/test";
 
 import type { Thread } from "../types";
@@ -164,6 +171,33 @@ describe("deriveComposerSendState", () => {
         elementContextCount: 0,
       }).hasSendableContent,
     ).toBe(false);
+  });
+
+  it("reports composer input at the provider send-turn character limit as valid", () => {
+    const state = deriveComposerSendState({
+      prompt: "x".repeat(PROVIDER_SEND_TURN_MAX_INPUT_CHARS),
+      imageCount: 0,
+      terminalContexts: [],
+    });
+
+    expect(state.inputCharCount).toBe(PROVIDER_SEND_TURN_MAX_INPUT_CHARS);
+    expect(state.inputCharsOverLimit).toBe(0);
+    expect(state.isInputNearLimit).toBe(true);
+    expect(state.isInputOverLimit).toBe(false);
+    expect(state.hasSendableContent).toBe(true);
+  });
+
+  it("reports composer input that exceeds the provider send-turn character limit", () => {
+    const state = deriveComposerSendState({
+      prompt: "x".repeat(PROVIDER_SEND_TURN_MAX_INPUT_CHARS + 1),
+      imageCount: 0,
+      terminalContexts: [],
+    });
+
+    expect(state.inputCharCount).toBe(PROVIDER_SEND_TURN_MAX_INPUT_CHARS + 1);
+    expect(state.inputCharsOverLimit).toBe(1);
+    expect(state.isInputOverLimit).toBe(true);
+    expect(state.hasSendableContent).toBe(true);
   });
 });
 

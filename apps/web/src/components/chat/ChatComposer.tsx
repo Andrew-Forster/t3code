@@ -42,7 +42,12 @@ import {
   expandCollapsedComposerCursor,
   replaceTextRange,
 } from "../../composer-logic";
-import { deriveComposerSendState, readFileAsDataUrl } from "../ChatView.logic";
+import {
+  deriveComposerSendState,
+  formatComposerInputLimitExceededMessage,
+  formatComposerInputLimitUsage,
+  readFileAsDataUrl,
+} from "../ChatView.logic";
 import {
   type ComposerImageAttachment,
   type DraftId,
@@ -346,6 +351,7 @@ const ComposerFooterPrimaryActions = memo(function ComposerFooterPrimaryActions(
   isConnecting: boolean;
   isEnvironmentUnavailable: boolean;
   hasSendableContent: boolean;
+  sendDisabledReason?: string | null;
   preserveComposerFocusOnPointerDown?: boolean;
   onPreviousPendingQuestion: () => void;
   onInterrupt: () => void;
@@ -373,6 +379,7 @@ const ComposerFooterPrimaryActions = memo(function ComposerFooterPrimaryActions(
         isEnvironmentUnavailable={props.isEnvironmentUnavailable}
         isPreparingWorktree={props.isPreparingWorktree}
         hasSendableContent={props.hasSendableContent}
+        sendDisabledReason={props.sendDisabledReason ?? null}
         preserveComposerFocusOnPointerDown={props.preserveComposerFocusOnPointerDown ?? false}
         onPreviousPendingQuestion={props.onPreviousPendingQuestion}
         onInterrupt={props.onInterrupt}
@@ -1134,9 +1141,24 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
         : null,
     [activePendingIsResponding, activePendingProgress, activePendingResolvedAnswers],
   );
+  const composerSendDisabledReason =
+    pendingPrimaryAction === null && composerSendState.isInputOverLimit
+      ? formatComposerInputLimitExceededMessage(composerSendState.inputCharsOverLimit)
+      : null;
+  const composerInputLimitStatusText = composerSendState.isInputOverLimit
+    ? composerSendDisabledReason
+    : formatComposerInputLimitUsage(composerSendState.inputCharCount);
+  const showComposerInputLimitStatus =
+    pendingPrimaryAction === null &&
+    !isComposerApprovalState &&
+    (composerSendState.isInputNearLimit || composerSendState.isInputOverLimit);
   const collapsedComposerPrimaryActionDisabled =
-    phase === "running" || isSendBusy || isConnecting || !composerSendState.hasSendableContent;
-  const collapsedComposerPrimaryActionLabel = "Send message";
+    phase === "running" ||
+    isSendBusy ||
+    isConnecting ||
+    composerSendDisabledReason !== null ||
+    !composerSendState.hasSendableContent;
+  const collapsedComposerPrimaryActionLabel = composerSendDisabledReason ?? "Send message";
   const showMobilePendingAnswerActions =
     isMobileViewport && !isComposerCollapsedMobile && pendingPrimaryAction !== null;
 
@@ -1677,10 +1699,14 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
     if (activePendingProgress) {
       return activePendingProgress.isLastQuestion && Boolean(activePendingResolvedAnswers);
     }
-    return showPlanFollowUpPrompt || composerSendState.hasSendableContent;
+    return (
+      composerSendDisabledReason === null &&
+      (showPlanFollowUpPrompt || composerSendState.hasSendableContent)
+    );
   }, [
     activePendingProgress,
     activePendingResolvedAnswers,
+    composerSendDisabledReason,
     composerSendState.hasSendableContent,
     isConnecting,
     isMobileViewport,
@@ -1691,12 +1717,26 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
 
   const submitComposer = useCallback(
     (event?: { preventDefault: () => void }) => {
+      if (composerSendDisabledReason) {
+        event?.preventDefault();
+        toastManager.add({
+          type: "error",
+          title: "Message too long",
+          description: composerSendDisabledReason,
+        });
+        return;
+      }
       onSend(event);
       if (shouldBlurMobileComposerOnSubmit()) {
         blurMobileComposerAfterSend();
       }
     },
-    [blurMobileComposerAfterSend, onSend, shouldBlurMobileComposerOnSubmit],
+    [
+      blurMobileComposerAfterSend,
+      composerSendDisabledReason,
+      onSend,
+      shouldBlurMobileComposerOnSubmit,
+    ],
   );
   const expandMobileComposer = useCallback(() => {
     if (composerBlurFrameRef.current !== null) {
@@ -2423,6 +2463,22 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
                   (environmentUnavailable !== null && activePendingProgress === null)
                 }
               />
+              {showComposerInputLimitStatus ? (
+                <div
+                  className={cn(
+                    "mt-2 flex min-w-0 items-center justify-end gap-1.5 px-1 text-xs leading-4",
+                    composerSendState.isInputOverLimit
+                      ? "text-destructive"
+                      : "text-muted-foreground/70",
+                  )}
+                  role={composerSendState.isInputOverLimit ? "alert" : "status"}
+                >
+                  {composerSendState.isInputOverLimit ? (
+                    <CircleAlertIcon className="size-3.5 shrink-0" aria-hidden="true" />
+                  ) : null}
+                  <span className="min-w-0 text-right">{composerInputLimitStatusText}</span>
+                </div>
+              ) : null}
               {showMobilePendingAnswerActions ? (
                 <div
                   data-chat-composer-mobile-pending-actions="true"
@@ -2550,6 +2606,7 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
                   isEnvironmentUnavailable={environmentUnavailable !== null}
                   isPreparingWorktree={isPreparingWorktree}
                   hasSendableContent={composerSendState.hasSendableContent}
+                  sendDisabledReason={composerSendDisabledReason}
                   preserveComposerFocusOnPointerDown={isMobileViewport}
                   onPreviousPendingQuestion={onPreviousActivePendingUserInputQuestion}
                   onInterrupt={handleInterruptPrimaryAction}
