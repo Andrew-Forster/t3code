@@ -34,7 +34,7 @@ import * as ElectronMenu from "../../electron/ElectronMenu.ts";
 import * as ElectronShell from "../../electron/ElectronShell.ts";
 import * as ElectronTheme from "../../electron/ElectronTheme.ts";
 import * as ElectronWindow from "../../electron/ElectronWindow.ts";
-import { setWindowsTaskbarUnreadIndicator } from "../../electron/WindowsTaskbarBadge.ts";
+import { setDesktopUnreadBadge } from "../../electron/DesktopUnreadBadge.ts";
 import * as IpcChannels from "../channels.ts";
 import * as DesktopIpc from "../DesktopIpc.ts";
 import {
@@ -280,7 +280,7 @@ export const setTaskbarUnreadIndicator = DesktopIpc.makeIpcMethod({
     const environment = yield* DesktopEnvironment.DesktopEnvironment;
     const electronWindow = yield* ElectronWindow.ElectronWindow;
     const window = yield* electronWindow.main;
-    return setWindowsTaskbarUnreadIndicator({
+    return setDesktopUnreadBadge({
       platform: environment.platform,
       window: Option.getOrNull(window),
       count: input.count,

@@ -81,7 +81,9 @@ export function DesktopTaskbarUnreadCoordinator() {
     () => countUnseenTaskbarCompletions(threads, lastVisitedAtByThreadKey),
     [lastVisitedAtByThreadKey, threads],
   );
-  const setIndicator = window.desktopBridge?.setTaskbarUnreadIndicator;
+  const desktopBridge = window.desktopBridge;
+  const setIndicator = desktopBridge?.setTaskbarUnreadIndicator;
+  const needsOverlayImage = desktopBridge?.getClientPlatform?.() === "win32";
 
   useEffect(() => {
     if (setIndicator === undefined) {
@@ -89,9 +91,9 @@ export function DesktopTaskbarUnreadCoordinator() {
     }
     void setIndicator({
       count,
-      badgeDataUrl: count > 0 ? createTaskbarBadgeDataUrl(count) : null,
+      badgeDataUrl: count > 0 && needsOverlayImage ? createTaskbarBadgeDataUrl(count) : null,
     }).catch(() => {});
-  }, [count, setIndicator]);
+  }, [count, needsOverlayImage, setIndicator]);
 
   useEffect(
     () => () => {

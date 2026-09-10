@@ -1,16 +1,18 @@
 import { assert, beforeEach, describe, it } from "@effect/vitest";
 import { vi } from "vite-plus/test";
 
-const { createFromBuffer, overlayImage } = vi.hoisted(() => ({
+const { createFromBuffer, overlayImage, setBadgeCount } = vi.hoisted(() => ({
   createFromBuffer: vi.fn(),
   overlayImage: { isEmpty: vi.fn(() => false) },
+  setBadgeCount: vi.fn(() => true),
 }));
 
 vi.mock("electron", () => ({
+  app: { setBadgeCount },
   nativeImage: { createFromBuffer },
 }));
 
-import { setWindowsTaskbarUnreadIndicator } from "./WindowsTaskbarBadge.ts";
+import { setDesktopUnreadBadge } from "./DesktopUnreadBadge.ts";
 
 function makeWindow(destroyed = false) {
   return {
@@ -19,21 +21,21 @@ function makeWindow(destroyed = false) {
   };
 }
 
-describe("setWindowsTaskbarUnreadIndicator", () => {
+describe("setDesktopUnreadBadge", () => {
   beforeEach(() => {
     createFromBuffer.mockReset();
     createFromBuffer.mockReturnValue(overlayImage);
     overlayImage.isEmpty.mockReset();
     overlayImage.isEmpty.mockReturnValue(false);
+    setBadgeCount.mockReset();
+    setBadgeCount.mockReturnValue(true);
   });
 
   it("sets and clears the Windows taskbar overlay", () => {
     const window = makeWindow();
     const badgeDataUrl = "data:image/png;base64,one";
 
-    assert.isTrue(
-      setWindowsTaskbarUnreadIndicator({ platform: "win32", window, count: 1, badgeDataUrl }),
-    );
+    assert.isTrue(setDesktopUnreadBadge({ platform: "win32", window, count: 1, badgeDataUrl }));
     assert.deepEqual(createFromBuffer.mock.calls, [
       [Buffer.from("one", "base64"), { width: 64, height: 64, scaleFactor: 4 }],
     ]);
@@ -43,7 +45,7 @@ describe("setWindowsTaskbarUnreadIndicator", () => {
     ]);
 
     assert.isTrue(
-      setWindowsTaskbarUnreadIndicator({
+      setDesktopUnreadBadge({
         platform: "win32",
         window,
         count: 0,
@@ -53,25 +55,41 @@ describe("setWindowsTaskbarUnreadIndicator", () => {
     assert.deepEqual(window.setOverlayIcon.mock.calls[1], [null, ""]);
   });
 
-  it("caches decoded overlays", () => {
+  it("uses the native badge count on macOS", () => {
+    assert.isTrue(
+      setDesktopUnreadBadge({ platform: "darwin", window: null, count: 2, badgeDataUrl: null }),
+    );
+    assert.isTrue(
+      setDesktopUnreadBadge({ platform: "darwin", window: null, count: 0, badgeDataUrl: null }),
+    );
+
+    assert.deepEqual(setBadgeCount.mock.calls, [[2], [0]]);
+    assert.lengthOf(createFromBuffer.mock.calls, 0);
+  });
+
+  it("returns the native result when macOS cannot show badge counts", () => {
+    setBadgeCount.mockReturnValueOnce(false);
+
+    assert.isFalse(
+      setDesktopUnreadBadge({ platform: "darwin", window: null, count: 1, badgeDataUrl: null }),
+    );
+  });
+
+  it("caches decoded Windows overlays", () => {
     const window = makeWindow();
     const badgeDataUrl = "data:image/png;base64,two";
 
-    assert.isTrue(
-      setWindowsTaskbarUnreadIndicator({ platform: "win32", window, count: 2, badgeDataUrl }),
-    );
-    assert.isTrue(
-      setWindowsTaskbarUnreadIndicator({ platform: "win32", window, count: 2, badgeDataUrl }),
-    );
+    assert.isTrue(setDesktopUnreadBadge({ platform: "win32", window, count: 2, badgeDataUrl }));
+    assert.isTrue(setDesktopUnreadBadge({ platform: "win32", window, count: 2, badgeDataUrl }));
 
     assert.equal(createFromBuffer.mock.calls.length, 1);
   });
 
-  it("rejects missing, malformed, and empty badge images", () => {
+  it("rejects missing, malformed, and empty Windows badge images", () => {
     const window = makeWindow();
 
     assert.isFalse(
-      setWindowsTaskbarUnreadIndicator({
+      setDesktopUnreadBadge({
         platform: "win32",
         window,
         count: 1,
@@ -79,7 +97,7 @@ describe("setWindowsTaskbarUnreadIndicator", () => {
       }),
     );
     assert.isFalse(
-      setWindowsTaskbarUnreadIndicator({
+      setDesktopUnreadBadge({
         platform: "win32",
         window,
         count: 1,
@@ -89,7 +107,7 @@ describe("setWindowsTaskbarUnreadIndicator", () => {
 
     overlayImage.isEmpty.mockReturnValueOnce(true);
     assert.isFalse(
-      setWindowsTaskbarUnreadIndicator({
+      setDesktopUnreadBadge({
         platform: "win32",
         window,
         count: 1,
@@ -99,21 +117,13 @@ describe("setWindowsTaskbarUnreadIndicator", () => {
     assert.lengthOf(window.setOverlayIcon.mock.calls, 0);
   });
 
-  it("does nothing outside Windows or without a live window", () => {
+  it("does nothing on unsupported platforms or without a live Windows window", () => {
     const window = makeWindow();
     const destroyedWindow = makeWindow(true);
     const badgeDataUrl = "data:image/png;base64,platform";
 
     assert.isFalse(
-      setWindowsTaskbarUnreadIndicator({
-        platform: "darwin",
-        window,
-        count: 1,
-        badgeDataUrl,
-      }),
-    );
-    assert.isFalse(
-      setWindowsTaskbarUnreadIndicator({
+      setDesktopUnreadBadge({
         platform: "linux",
         window,
         count: 1,
@@ -121,7 +131,7 @@ describe("setWindowsTaskbarUnreadIndicator", () => {
       }),
     );
     assert.isFalse(
-      setWindowsTaskbarUnreadIndicator({
+      setDesktopUnreadBadge({
         platform: "win32",
         window: null,
         count: 1,
@@ -129,7 +139,7 @@ describe("setWindowsTaskbarUnreadIndicator", () => {
       }),
     );
     assert.isFalse(
-      setWindowsTaskbarUnreadIndicator({
+      setDesktopUnreadBadge({
         platform: "win32",
         window: destroyedWindow,
         count: 1,
@@ -138,21 +148,29 @@ describe("setWindowsTaskbarUnreadIndicator", () => {
     );
     assert.lengthOf(window.setOverlayIcon.mock.calls, 0);
     assert.lengthOf(destroyedWindow.setOverlayIcon.mock.calls, 0);
+    assert.lengthOf(setBadgeCount.mock.calls, 0);
   });
 
-  it("fails soft when Electron rejects the overlay", () => {
+  it("fails soft when Electron rejects a badge update", () => {
     const window = makeWindow();
     window.setOverlayIcon.mockImplementation(() => {
       throw new Error("overlay failed");
     });
 
     assert.isFalse(
-      setWindowsTaskbarUnreadIndicator({
+      setDesktopUnreadBadge({
         platform: "win32",
         window,
         count: 1,
         badgeDataUrl: "data:image/png;base64,failure",
       }),
+    );
+
+    setBadgeCount.mockImplementationOnce(() => {
+      throw new Error("badge failed");
+    });
+    assert.isFalse(
+      setDesktopUnreadBadge({ platform: "darwin", window: null, count: 1, badgeDataUrl: null }),
     );
   });
 });

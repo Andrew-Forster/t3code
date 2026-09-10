@@ -32,17 +32,21 @@ function getUnreadCompletionOverlay(dataUrl: string): Electron.NativeImage | nul
   return overlay;
 }
 
-export function setWindowsTaskbarUnreadIndicator(input: {
+export function setDesktopUnreadBadge(input: {
   readonly platform: NodeJS.Platform;
   readonly window: Pick<Electron.BrowserWindow, "isDestroyed" | "setOverlayIcon"> | null;
   readonly count: number;
   readonly badgeDataUrl: string | null;
 }): boolean {
-  if (input.platform !== "win32" || input.window === null || input.window.isDestroyed()) {
-    return false;
-  }
-
   try {
+    if (input.platform === "darwin") {
+      return Electron.app.setBadgeCount(input.count);
+    }
+
+    if (input.platform !== "win32" || input.window === null || input.window.isDestroyed()) {
+      return false;
+    }
+
     if (input.count === 0) {
       input.window.setOverlayIcon(null, "");
       return true;
