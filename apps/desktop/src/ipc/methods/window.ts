@@ -34,6 +34,7 @@ import * as ElectronMenu from "../../electron/ElectronMenu.ts";
 import * as ElectronShell from "../../electron/ElectronShell.ts";
 import * as ElectronTheme from "../../electron/ElectronTheme.ts";
 import * as ElectronWindow from "../../electron/ElectronWindow.ts";
+import { setWindowsTaskbarUnreadIndicator } from "../../electron/WindowsTaskbarBadge.ts";
 import * as IpcChannels from "../channels.ts";
 import * as DesktopIpc from "../DesktopIpc.ts";
 import {
@@ -265,6 +266,22 @@ export const setTheme = DesktopIpc.makeIpcMethod({
   handler: Effect.fn("desktop.ipc.window.setTheme")(function* (theme) {
     const electronTheme = yield* ElectronTheme.ElectronTheme;
     yield* electronTheme.setSource(theme);
+  }),
+});
+
+export const setTaskbarUnreadIndicator = DesktopIpc.makeIpcMethod({
+  channel: IpcChannels.SET_TASKBAR_UNREAD_INDICATOR_CHANNEL,
+  payload: Schema.Struct({ visible: Schema.Boolean }),
+  result: Schema.Boolean,
+  handler: Effect.fn("desktop.ipc.window.setTaskbarUnreadIndicator")(function* (input) {
+    const environment = yield* DesktopEnvironment.DesktopEnvironment;
+    const electronWindow = yield* ElectronWindow.ElectronWindow;
+    const window = yield* electronWindow.main;
+    return setWindowsTaskbarUnreadIndicator({
+      platform: environment.platform,
+      window: Option.getOrNull(window),
+      visible: input.visible,
+    });
   }),
 });
 
