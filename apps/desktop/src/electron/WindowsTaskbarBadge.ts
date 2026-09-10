@@ -1,51 +1,62 @@
 import * as Electron from "electron";
 
 const OVERLAY_SIZE = 16;
-const OVERLAY_DESCRIPTION = "Completed thread awaiting review";
+const OVERLAY_SCALE_FACTOR = 4;
+const PNG_DATA_URL_PREFIX = "data:image/png;base64,";
 
-let unreadCompletionOverlay: Electron.NativeImage | undefined;
+const overlayByDataUrl = new Map<string, Electron.NativeImage>();
 
-function getUnreadCompletionOverlay(): Electron.NativeImage {
-  if (unreadCompletionOverlay !== undefined) {
-    return unreadCompletionOverlay;
+function getUnreadCompletionOverlay(dataUrl: string): Electron.NativeImage | null {
+  const cached = overlayByDataUrl.get(dataUrl);
+  if (cached !== undefined) {
+    return cached;
   }
 
-  // The Windows bitmap representation is BGRA. Opaque pixels avoid
-  // platform-specific alpha premultiplication while keeping the icon crisp.
-  const bitmap = Buffer.alloc(OVERLAY_SIZE * OVERLAY_SIZE * 4);
-  const center = (OVERLAY_SIZE - 1) / 2;
-  for (let y = 0; y < OVERLAY_SIZE; y += 1) {
-    for (let x = 0; x < OVERLAY_SIZE; x += 1) {
-      const distance = Math.hypot(x - center, y - center);
-      const offset = (y * OVERLAY_SIZE + x) * 4;
-      if (distance <= 4.5) {
-        bitmap.set([129, 185, 16, 255], offset);
-      } else if (distance <= 6.25) {
-        bitmap.set([255, 255, 255, 255], offset);
-      }
-    }
+  if (!dataUrl.startsWith(PNG_DATA_URL_PREFIX)) {
+    return null;
   }
 
-  unreadCompletionOverlay = Electron.nativeImage.createFromBitmap(bitmap, {
-    width: OVERLAY_SIZE,
-    height: OVERLAY_SIZE,
-  });
-  return unreadCompletionOverlay;
+  const overlay = Electron.nativeImage.createFromBuffer(
+    Buffer.from(dataUrl.slice(PNG_DATA_URL_PREFIX.length), "base64"),
+    {
+      width: OVERLAY_SIZE * OVERLAY_SCALE_FACTOR,
+      height: OVERLAY_SIZE * OVERLAY_SCALE_FACTOR,
+      scaleFactor: OVERLAY_SCALE_FACTOR,
+    },
+  );
+  if (overlay.isEmpty()) {
+    return null;
+  }
+
+  overlayByDataUrl.set(dataUrl, overlay);
+  return overlay;
 }
 
 export function setWindowsTaskbarUnreadIndicator(input: {
   readonly platform: NodeJS.Platform;
   readonly window: Pick<Electron.BrowserWindow, "isDestroyed" | "setOverlayIcon"> | null;
-  readonly visible: boolean;
+  readonly count: number;
+  readonly badgeDataUrl: string | null;
 }): boolean {
   if (input.platform !== "win32" || input.window === null || input.window.isDestroyed()) {
     return false;
   }
 
   try {
+    if (input.count === 0) {
+      input.window.setOverlayIcon(null, "");
+      return true;
+    }
+
+    const overlay =
+      input.badgeDataUrl === null ? null : getUnreadCompletionOverlay(input.badgeDataUrl);
+    if (overlay === null) {
+      return false;
+    }
+
     input.window.setOverlayIcon(
-      input.visible ? getUnreadCompletionOverlay() : null,
-      input.visible ? OVERLAY_DESCRIPTION : "",
+      overlay,
+      `${input.count} completed ${input.count === 1 ? "thread" : "threads"} awaiting review`,
     );
     return true;
   } catch {

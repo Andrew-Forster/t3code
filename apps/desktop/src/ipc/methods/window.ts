@@ -271,7 +271,10 @@ export const setTheme = DesktopIpc.makeIpcMethod({
 
 export const setTaskbarUnreadIndicator = DesktopIpc.makeIpcMethod({
   channel: IpcChannels.SET_TASKBAR_UNREAD_INDICATOR_CHANNEL,
-  payload: Schema.Struct({ visible: Schema.Boolean }),
+  payload: Schema.Struct({
+    count: Schema.Int.check(Schema.isGreaterThanOrEqualTo(0)),
+    badgeDataUrl: Schema.NullOr(Schema.String.check(Schema.isMaxLength(65_536))),
+  }),
   result: Schema.Boolean,
   handler: Effect.fn("desktop.ipc.window.setTaskbarUnreadIndicator")(function* (input) {
     const environment = yield* DesktopEnvironment.DesktopEnvironment;
@@ -280,7 +283,8 @@ export const setTaskbarUnreadIndicator = DesktopIpc.makeIpcMethod({
     return setWindowsTaskbarUnreadIndicator({
       platform: environment.platform,
       window: Option.getOrNull(window),
-      visible: input.visible,
+      count: input.count,
+      badgeDataUrl: input.badgeDataUrl,
     });
   }),
 });
