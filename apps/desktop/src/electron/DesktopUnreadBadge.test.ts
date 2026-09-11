@@ -85,7 +85,7 @@ describe("setDesktopUnreadBadge", () => {
     assert.equal(createFromBuffer.mock.calls.length, 1);
   });
 
-  it("rejects missing, malformed, and empty Windows badge images", () => {
+  it("clears stale overlays for missing, malformed, and empty Windows badge images", () => {
     const window = makeWindow();
 
     assert.isFalse(
@@ -114,7 +114,11 @@ describe("setDesktopUnreadBadge", () => {
         badgeDataUrl: "data:image/png;base64,empty",
       }),
     );
-    assert.lengthOf(window.setOverlayIcon.mock.calls, 0);
+    assert.deepEqual(window.setOverlayIcon.mock.calls, [
+      [null, ""],
+      [null, ""],
+      [null, ""],
+    ]);
   });
 
   it("does nothing on unsupported platforms or without a live Windows window", () => {

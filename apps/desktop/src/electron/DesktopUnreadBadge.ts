@@ -55,6 +55,7 @@ export function setDesktopUnreadBadge(input: {
     const overlay =
       input.badgeDataUrl === null ? null : getUnreadCompletionOverlay(input.badgeDataUrl);
     if (overlay === null) {
+      input.window.setOverlayIcon(null, "");
       return false;
     }
 
