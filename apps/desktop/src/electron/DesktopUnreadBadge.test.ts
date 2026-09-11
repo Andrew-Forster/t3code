@@ -1,4 +1,5 @@
 import { assert, beforeEach, describe, it } from "@effect/vitest";
+import * as Effect from "effect/Effect";
 import { vi } from "vite-plus/test";
 
 const { createFromBuffer, overlayImage, setBadgeCount } = vi.hoisted(() => ({
@@ -11,6 +12,11 @@ vi.mock("electron", () => ({
   app: { setBadgeCount },
   nativeImage: { createFromBuffer },
 }));
+
+vi.mock("effect/Effect", async (importOriginal) => {
+  const actual = await importOriginal<typeof Effect>();
+  return { ...actual, logWarning: vi.fn(() => actual.void) };
+});
 
 import { setDesktopUnreadBadge } from "./DesktopUnreadBadge.ts";
 
@@ -156,6 +162,7 @@ describe("setDesktopUnreadBadge", () => {
   });
 
   it("fails soft when Electron rejects a badge update", () => {
+    const warn = vi.mocked(Effect.logWarning);
     const window = makeWindow();
     window.setOverlayIcon.mockImplementation(() => {
       throw new Error("overlay failed");
@@ -176,5 +183,9 @@ describe("setDesktopUnreadBadge", () => {
     assert.isFalse(
       setDesktopUnreadBadge({ platform: "darwin", window: null, count: 1, badgeDataUrl: null }),
     );
+    assert.deepEqual(warn.mock.calls, [
+      ["Failed to update desktop unread badge", new Error("overlay failed")],
+      ["Failed to update desktop unread badge", new Error("badge failed")],
+    ]);
   });
 });

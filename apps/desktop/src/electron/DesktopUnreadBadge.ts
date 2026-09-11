@@ -1,4 +1,5 @@
 import * as Electron from "electron";
+import * as Effect from "effect/Effect";
 
 const OVERLAY_SIZE = 16;
 const OVERLAY_SCALE_FACTOR = 4;
@@ -64,7 +65,8 @@ export function setDesktopUnreadBadge(input: {
       `${input.count} completed ${input.count === 1 ? "thread" : "threads"} awaiting review`,
     );
     return true;
-  } catch {
+  } catch (error) {
+    Effect.runSync(Effect.logWarning("Failed to update desktop unread badge", error));
     return false;
   }
 }
