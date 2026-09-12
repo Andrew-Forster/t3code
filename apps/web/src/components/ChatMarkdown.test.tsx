@@ -555,6 +555,44 @@ describe("ChatMarkdown file option chips", () => {
   });
 });
 
+describe("ChatMarkdown Codex follow-ups", () => {
+  const followup =
+    ':codex-followup[Prepare print version]{prompt="Prepare the document for printing."}';
+
+  it.each([true, false])("renders the visible label with parseRawHtml=%s", (parseRawHtml) => {
+    const html = renderToStaticMarkup(
+      <ChatMarkdown cwd="/tmp/project" text={`- ${followup}`} parseRawHtml={parseRawHtml} />,
+    );
+
+    expect(html).toContain("<li>Prepare print version</li>");
+    expect(html).not.toContain("codex-followup");
+    expect(html).not.toContain("Prepare the document for printing.");
+  });
+
+  it("leaves malformed and incomplete follow-ups literal", () => {
+    for (const text of [
+      ":codex-followup[Prepare print version]",
+      followup.slice(0, -1),
+      ':codex-followup-extra[Prepare print version]{prompt="Prepare it."}',
+    ]) {
+      const html = renderToStaticMarkup(<ChatMarkdown cwd="/tmp/project" text={text} />);
+
+      expect(html).toContain("codex-followup");
+    }
+  });
+
+  it("preserves follow-up examples inside code", () => {
+    const html = renderToStaticMarkup(
+      <ChatMarkdown
+        cwd="/tmp/project"
+        text={`\`${followup}\`\n\n\`\`\`text\n${followup}\n\`\`\``}
+      />,
+    );
+
+    expect(html.match(/codex-followup/g)).toHaveLength(2);
+  });
+});
+
 const ARTIFACT_TEMPLATE_DIRECTIVE =
   '::artifact-template{skill_name="artifact-template-hello-world" skill_directory="/Users/test/.codex/skills/artifact-template-hello-world" display_name="Hello World" artifact_kind="document"}';
 

@@ -24,7 +24,7 @@ import {
 } from "@t3tools/client-runtime/markdown-images";
 import { resolveViewedImageAsset } from "@t3tools/client-runtime/work-log/presentation";
 import {
-  renderCodexFileCitationsAsMarkdown,
+  renderCodexInlineDirectivesAsMarkdown,
   splitCodexArtifactTemplateMarkdown,
 } from "@t3tools/client-runtime/codex-markdown-directives";
 import { CHAT_LIST_ANCHOR_OFFSET, resolveChatListAnchoredEndSpace } from "@t3tools/shared/chatList";
@@ -767,7 +767,7 @@ const AssistantMarkdownContent = memo(function AssistantMarkdownContent(props: {
     }
     if (segment.markdown.trim().length === 0) return null;
 
-    const markdown = renderCodexFileCitationsAsMarkdown(segment.markdown);
+    const markdown = renderCodexInlineDirectivesAsMarkdown(segment.markdown);
     return hasNativeSelectableMarkdownText() ? (
       <SelectableMarkdownText
         key={`markdown:${segment.sourceOffset}`}

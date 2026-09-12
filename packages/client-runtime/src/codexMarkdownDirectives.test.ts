@@ -5,7 +5,7 @@ import { unified } from "unified";
 import {
   remarkCodexDirectives,
   renderCodexDirectivesForCopy,
-  renderCodexFileCitationsAsMarkdown,
+  renderCodexInlineDirectivesAsMarkdown,
   splitCodexArtifactTemplateMarkdown,
 } from "./codexMarkdownDirectives.js";
 
@@ -25,6 +25,8 @@ interface TestNode {
 }
 
 const FILE_CITATION = ':codex-file-citation{path="outputs/report.xlsx" purpose="output"}';
+const FOLLOWUP =
+  ':codex-followup[Prepare print version]{prompt="Prepare the document for printing."}';
 const ARTIFACT_TEMPLATE =
   '::artifact-template{skill_name="artifact-template-hello-world" skill_directory="/Users/test/.codex/skills/artifact-template-hello-world" display_name="Hello World" artifact_kind="document"}';
 
@@ -69,6 +71,13 @@ describe("remarkCodexDirectives", () => {
     });
   });
 
+  it("renders a follow-up as its visible label", () => {
+    expect(parse(FOLLOWUP).children?.[0]?.children?.[0]).toMatchObject({
+      type: "text",
+      value: "Prepare print version",
+    });
+  });
+
   it.each([
     "Meeting at 10:30",
     "Open src/main.ts:42",
@@ -76,6 +85,7 @@ describe("remarkCodexDirectives", () => {
     "::note",
     ":::note\ncontent\n:::",
     ':codex-file-citation-extra{path="outputs/report.xlsx"}',
+    ':codex-followup-extra[Prepare print version]{prompt="Prepare it."}',
     "::artifact-template-extra",
   ])("does not change unrelated colon syntax: %s", (markdown) => {
     expect(parse(markdown)).toEqual(parseOrdinaryMarkdown(markdown));
@@ -83,6 +93,9 @@ describe("remarkCodexDirectives", () => {
 
   it.each([
     ':codex-file-citation{purpose="output"}',
+    ":codex-followup[Prepare print version]",
+    ':codex-followup[]{prompt="Prepare it."}',
+    ':codex-followup[Prepare print version]{prompt=""}',
     '::artifact-template{skill_name="artifact-template-hello-world"}',
   ])("keeps malformed supported directives literal: %s", (markdown) => {
     expect(parse(markdown)).toEqual(parseOrdinaryMarkdown(markdown));
@@ -91,9 +104,13 @@ describe("remarkCodexDirectives", () => {
 
 describe("native Markdown adapters", () => {
   it("uses the same parser to render file citations as portable links", () => {
-    expect(renderCodexFileCitationsAsMarkdown(`Created ${FILE_CITATION}.`)).toBe(
+    expect(renderCodexInlineDirectivesAsMarkdown(`Created ${FILE_CITATION}.`)).toBe(
       "Created [report.xlsx](<outputs/report.xlsx>).",
     );
+  });
+
+  it("renders follow-ups as portable label text", () => {
+    expect(renderCodexInlineDirectivesAsMarkdown(`- ${FOLLOWUP}`)).toBe("- Prepare print version");
   });
 
   it.each([
@@ -102,7 +119,17 @@ describe("native Markdown adapters", () => {
     `\`\`\`text\n${FILE_CITATION}\n\`\`\``,
     `[See ${FILE_CITATION}](https://example.com)`,
   ])("does not render excluded citation syntax: %s", (markdown) => {
-    expect(renderCodexFileCitationsAsMarkdown(markdown)).toBe(markdown);
+    expect(renderCodexInlineDirectivesAsMarkdown(markdown)).toBe(markdown);
+  });
+
+  it.each([
+    `\\${FOLLOWUP}`,
+    `\`${FOLLOWUP}\``,
+    `\`\`\`text\n${FOLLOWUP}\n\`\`\``,
+    `[See ${FOLLOWUP}](https://example.com)`,
+    FOLLOWUP.slice(0, -1),
+  ])("does not render excluded or incomplete follow-up syntax: %s", (markdown) => {
+    expect(renderCodexInlineDirectivesAsMarkdown(markdown)).toBe(markdown);
   });
 
   it("splits artifact cards from surrounding native Markdown", () => {
@@ -140,8 +167,12 @@ describe("native Markdown adapters", () => {
 
 describe("directive copy adapter", () => {
   it("copies the Markdown representations shown by citation chips and template cards", () => {
-    expect(renderCodexDirectivesForCopy(`Created ${FILE_CITATION}.\n\n${ARTIFACT_TEMPLATE}`)).toBe(
-      "Created [report.xlsx](<outputs/report.xlsx>).\n\nHello World (Document template)",
+    expect(
+      renderCodexDirectivesForCopy(
+        `Created ${FILE_CITATION}.\n\n${FOLLOWUP}\n\n${ARTIFACT_TEMPLATE}`,
+      ),
+    ).toBe(
+      "Created [report.xlsx](<outputs/report.xlsx>).\n\nPrepare print version\n\nHello World (Document template)",
     );
   });
 

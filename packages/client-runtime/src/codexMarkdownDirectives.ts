@@ -20,6 +20,7 @@ const COLON = 58;
 const DASH = 45;
 const UNDERSCORE = 95;
 const CODEX_FILE_CITATION_NAME = "codex-file-citation";
+const CODEX_FOLLOWUP_NAME = "codex-followup";
 const CODEX_ARTIFACT_TEMPLATE_NAME = "artifact-template";
 
 export const CODEX_ARTIFACT_TEMPLATE_HAST_PROPERTIES = [
@@ -45,7 +46,7 @@ interface MarkdownAstNode {
   position?: MarkdownPosition;
   data?: {
     codexArtifactTemplate?: CodexArtifactTemplate;
-    codexFileCitationMarkdown?: string;
+    codexInlineMarkdown?: string;
     hName?: string;
     hProperties?: Record<string, unknown>;
   };
@@ -132,7 +133,10 @@ function codexDirectiveSyntax(): Extension {
 
   return {
     text: {
-      [COLON]: restrictedDirective(textDirective, 1, CODEX_FILE_CITATION_NAME),
+      [COLON]: [
+        restrictedDirective(textDirective, 1, CODEX_FILE_CITATION_NAME),
+        restrictedDirective(textDirective, 1, CODEX_FOLLOWUP_NAME),
+      ],
     },
     flow: {
       [COLON]: restrictedDirective(leafDirective, 2, CODEX_ARTIFACT_TEMPLATE_NAME),
@@ -193,10 +197,33 @@ function renderFileCitation(node: MarkdownAstNode, source: string, insideLink: b
   node.type = "link";
   node.url = citation.href;
   node.children = [{ type: "text", value: citation.label }];
-  node.data = { codexFileCitationMarkdown: codexFileCitationMarkdown(citation) };
+  node.data = { codexInlineMarkdown: codexFileCitationMarkdown(citation) };
   delete node.name;
   delete node.attributes;
   delete node.value;
+}
+
+function renderFollowup(node: MarkdownAstNode, source: string, insideLink: boolean): void {
+  const prompt = node.attributes?.prompt;
+  const label = node.children?.length === 1 ? node.children[0]?.value : undefined;
+  if (
+    insideLink ||
+    typeof prompt !== "string" ||
+    prompt.trim().length === 0 ||
+    typeof label !== "string" ||
+    label.trim().length === 0
+  ) {
+    restoreTextDirective(node, source);
+    return;
+  }
+
+  node.type = "text";
+  node.value = label;
+  node.data = { codexInlineMarkdown: label };
+  delete node.name;
+  delete node.attributes;
+  delete node.url;
+  delete node.children;
 }
 
 function renderArtifactTemplate(node: MarkdownAstNode, source: string): void {
@@ -231,6 +258,10 @@ function transformCodexDirectives(node: MarkdownAstNode, source: string, insideL
     renderFileCitation(node, source, insideLink);
     return;
   }
+  if (node.type === "textDirective" && node.name === CODEX_FOLLOWUP_NAME) {
+    renderFollowup(node, source, insideLink);
+    return;
+  }
   if (node.type === "leafDirective" && node.name === CODEX_ARTIFACT_TEMPLATE_NAME) {
     renderArtifactTemplate(node, source);
     return;
@@ -242,7 +273,7 @@ function transformCodexDirectives(node: MarkdownAstNode, source: string, insideL
   }
 }
 
-/** Adds grammar only for the two directives emitted by Codex, then renders them as mdast. */
+/** Adds grammar only for supported directives emitted by Codex, then renders them as mdast. */
 function attachCodexDirectives(this: Processor) {
   const data = this.data();
   const micromarkExtensions = data.micromarkExtensions ?? (data.micromarkExtensions = []);
@@ -276,8 +307,8 @@ function collectDirectiveMatches(node: MarkdownAstNode, matches: DirectiveMatch[
   const start = node.position?.start.offset;
   const end = node.position?.end.offset;
   if (start !== undefined && end !== undefined) {
-    if (node.data?.codexFileCitationMarkdown !== undefined) {
-      matches.push({ start, end, markdown: node.data.codexFileCitationMarkdown });
+    if (node.data?.codexInlineMarkdown !== undefined) {
+      matches.push({ start, end, markdown: node.data.codexInlineMarkdown });
       return;
     }
     if (node.data?.codexArtifactTemplate !== undefined) {
@@ -305,8 +336,13 @@ function renderDirectiveMatches(
 }
 
 /** Native Markdown renderers use this adapter because they cannot consume a Remark tree. */
-export function renderCodexFileCitationsAsMarkdown(markdown: string): string {
-  if (!markdown.includes(`:${CODEX_FILE_CITATION_NAME}`)) return markdown;
+export function renderCodexInlineDirectivesAsMarkdown(markdown: string): string {
+  if (
+    !markdown.includes(`:${CODEX_FILE_CITATION_NAME}`) &&
+    !markdown.includes(`:${CODEX_FOLLOWUP_NAME}`)
+  ) {
+    return markdown;
+  }
 
   return renderDirectiveMatches(markdown, (match) => match.markdown);
 }
@@ -315,6 +351,7 @@ export function renderCodexFileCitationsAsMarkdown(markdown: string): string {
 export function renderCodexDirectivesForCopy(markdown: string): string {
   if (
     !markdown.includes(`:${CODEX_FILE_CITATION_NAME}`) &&
+    !markdown.includes(`:${CODEX_FOLLOWUP_NAME}`) &&
     !markdown.includes(`::${CODEX_ARTIFACT_TEMPLATE_NAME}`)
   ) {
     return markdown;
