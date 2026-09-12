@@ -61,23 +61,29 @@ describe("setDesktopUnreadBadge", () => {
     assert.deepEqual(window.setOverlayIcon.mock.calls[1], [null, ""]);
   });
 
-  it("uses the native badge count on macOS", () => {
+  it("uses the native badge count on macOS and Linux", () => {
     assert.isTrue(
       setDesktopUnreadBadge({ platform: "darwin", window: null, count: 2, badgeDataUrl: null }),
     );
     assert.isTrue(
       setDesktopUnreadBadge({ platform: "darwin", window: null, count: 0, badgeDataUrl: null }),
     );
+    assert.isTrue(
+      setDesktopUnreadBadge({ platform: "linux", window: null, count: 3, badgeDataUrl: null }),
+    );
+    assert.isTrue(
+      setDesktopUnreadBadge({ platform: "linux", window: null, count: 0, badgeDataUrl: null }),
+    );
 
-    assert.deepEqual(setBadgeCount.mock.calls, [[2], [0]]);
+    assert.deepEqual(setBadgeCount.mock.calls, [[2], [0], [3], [0]]);
     assert.lengthOf(createFromBuffer.mock.calls, 0);
   });
 
-  it("returns the native result when macOS cannot show badge counts", () => {
+  it("returns the native result when the platform cannot show badge counts", () => {
     setBadgeCount.mockReturnValueOnce(false);
 
     assert.isFalse(
-      setDesktopUnreadBadge({ platform: "darwin", window: null, count: 1, badgeDataUrl: null }),
+      setDesktopUnreadBadge({ platform: "linux", window: null, count: 1, badgeDataUrl: null }),
     );
   });
 
@@ -134,7 +140,7 @@ describe("setDesktopUnreadBadge", () => {
 
     assert.isFalse(
       setDesktopUnreadBadge({
-        platform: "linux",
+        platform: "freebsd",
         window,
         count: 1,
         badgeDataUrl,

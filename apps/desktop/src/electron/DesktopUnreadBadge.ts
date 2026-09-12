@@ -40,7 +40,7 @@ export function setDesktopUnreadBadge(input: {
   readonly badgeDataUrl: string | null;
 }): boolean {
   try {
-    if (input.platform === "darwin") {
+    if (input.platform === "darwin" || input.platform === "linux") {
       return Electron.app.setBadgeCount(input.count);
     }
 
