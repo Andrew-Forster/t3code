@@ -1045,6 +1045,54 @@ describe("deriveWorkLogEntries", () => {
     expect(deriveWorkLogEntries(activities)).toHaveLength(2);
   });
 
+  it.each(["zsh", "bash", "sh"])(
+    "decodes %s wrapper quoting without losing compound commands",
+    (shell) => {
+      const inner = "pwd && rg --files -g 'AGENTS.md' -g '!node_modules'";
+      const command = `/${shell} -lc '${inner.replaceAll("'", `'"'"'`)}'`;
+      const [entry] = deriveWorkLogEntries([
+        makeActivity({
+          kind: "tool.completed",
+          summary: "Ran command",
+          payload: {
+            itemType: "command_execution",
+            data: {
+              item: { command, commandActions: [{ type: "search", command: "rg --files" }] },
+            },
+          },
+        }),
+      ]);
+      expect(entry?.command).toBe(inner);
+      expect(entry?.rawCommand).toBe(command);
+    },
+  );
+
+  it.each([
+    ["single quote escapes", "/bin/zsh -c 'echo '\\''hello'\\'''", "echo 'hello'"],
+    [
+      "literal shell syntax",
+      "/bin/bash -lc 'printf \"$HOME`whoami`\\n\"'",
+      'printf "$HOME`whoami`\\n"',
+    ],
+    [
+      "extra shell arguments",
+      "/bin/sh -c 'echo hello' 'argument'",
+      "/bin/sh -c 'echo hello' 'argument'",
+    ],
+    ["malformed quoting", "/bin/zsh -lc 'echo 'broken'", "/bin/zsh -lc 'echo 'broken'"],
+    ["PowerShell quoting", `pwsh -Command 'echo '"'"'hello'"'"''`, `echo '"'"'hello'"'"'`],
+    ["unwrapped command", `echo 'hello'`, `echo 'hello'`],
+  ])("preserves command semantics for %s", (_label, command, expected) => {
+    const [entry] = deriveWorkLogEntries([
+      makeActivity({
+        kind: "tool.completed",
+        summary: "Ran command",
+        payload: { itemType: "command_execution", data: { item: { command } } },
+      }),
+    ]);
+    expect(entry?.command).toBe(expected);
+  });
+
   it("unwraps PowerShell command wrappers for displayed command text", () => {
     const activities: OrchestrationThreadActivity[] = [
       makeActivity({

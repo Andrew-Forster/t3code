@@ -989,7 +989,12 @@ function findShellWrapperSpec(shell: string) {
   );
 }
 
-function unwrapCommandRemainder(value: string, wrapperFlagPattern: RegExp): string | null {
+// Decode POSIX quote concatenation without interpreting expansions or discarding extra arguments.
+function unwrapCommandRemainder(
+  value: string,
+  wrapperFlagPattern: RegExp,
+  posix: boolean,
+): string | null {
   const match = wrapperFlagPattern.exec(value);
   if (!match) {
     return null;
@@ -1003,6 +1008,16 @@ function unwrapCommandRemainder(value: string, wrapperFlagPattern: RegExp): stri
   const openingQuote = command[0];
   if ((openingQuote === "'" || openingQuote === '"') && !command.endsWith(openingQuote)) {
     return null;
+  }
+
+  if (posix && openingQuote === "'") {
+    const parts = command.match(/'[^']*'|"[^"\\$`]*"|\\['!]/g);
+    if (!parts || parts.join("") !== command) {
+      return null;
+    }
+    return parts
+      .map((part) => (part.startsWith("\\") ? part.slice(1) : part.slice(1, -1)))
+      .join("");
   }
 
   const unwrapped = trimMatchingOuterQuotes(command);
@@ -1025,7 +1040,13 @@ function unwrapKnownShellCommandWrapper(value: string): string {
     return value;
   }
 
-  return unwrapCommandRemainder(split.rest, spec.wrapperFlagPattern) ?? value;
+  return (
+    unwrapCommandRemainder(
+      split.rest,
+      spec.wrapperFlagPattern,
+      shell === "bash" || shell === "sh" || shell === "zsh",
+    ) ?? value
+  );
 }
 
 function formatCommandArrayPart(value: string): string {
