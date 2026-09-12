@@ -3,6 +3,8 @@ import remarkParse from "remark-parse";
 import { unified } from "unified";
 
 import {
+  appendCodexFollowupPrompt,
+  codexFollowupPromptFromHref,
   remarkCodexDirectives,
   renderCodexDirectivesForCopy,
   renderCodexInlineDirectivesAsMarkdown,
@@ -71,10 +73,18 @@ describe("remarkCodexDirectives", () => {
     });
   });
 
-  it("renders a follow-up as its visible label", () => {
+  it("renders a follow-up as semantic action metadata", () => {
     expect(parse(FOLLOWUP).children?.[0]?.children?.[0]).toMatchObject({
       type: "text",
       value: "Prepare print version",
+      data: {
+        hName: "span",
+        hProperties: {
+          dataCodexFollowup: "true",
+          dataFollowupLabel: "Prepare print version",
+          dataFollowupPrompt: "Prepare the document for printing.",
+        },
+      },
     });
   });
 
@@ -109,8 +119,10 @@ describe("native Markdown adapters", () => {
     );
   });
 
-  it("renders follow-ups as portable label text", () => {
-    expect(renderCodexInlineDirectivesAsMarkdown(`- ${FOLLOWUP}`)).toBe("- Prepare print version");
+  it("renders follow-ups as portable action links", () => {
+    expect(renderCodexInlineDirectivesAsMarkdown(`- ${FOLLOWUP}`)).toBe(
+      "- [Prepare print version](t3-followup:Prepare%20the%20document%20for%20printing.)",
+    );
   });
 
   it.each([
@@ -162,6 +174,24 @@ describe("native Markdown adapters", () => {
     expect(splitCodexArtifactTemplateMarkdown(code)).toEqual([
       { kind: "markdown", markdown: code, sourceOffset: 0 },
     ]);
+  });
+});
+
+describe("follow-up composer actions", () => {
+  it("round-trips the prompt through a portable action link", () => {
+    expect(
+      codexFollowupPromptFromHref("t3-followup:Prepare%20the%20document%20for%20printing."),
+    ).toBe("Prepare the document for printing.");
+    expect(codexFollowupPromptFromHref("https://example.com")).toBeNull();
+    expect(codexFollowupPromptFromHref("t3-followup:%E0%A4%A")).toBeNull();
+  });
+
+  it("appends a prompt once without overwriting an existing draft", () => {
+    const prompt = "Prepare the document for printing.";
+
+    expect(appendCodexFollowupPrompt("", prompt)).toBe(prompt);
+    expect(appendCodexFollowupPrompt("Keep this", prompt)).toBe(`Keep this ${prompt}`);
+    expect(appendCodexFollowupPrompt(prompt, prompt)).toBe(prompt);
   });
 });
 

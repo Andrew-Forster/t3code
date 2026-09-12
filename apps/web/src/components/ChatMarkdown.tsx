@@ -82,8 +82,11 @@ import { remarkGithubAlerts } from "../markdown-github-alerts";
 import {
   artifactTemplateFromHastProperties,
   CODEX_ARTIFACT_TEMPLATE_HAST_PROPERTIES,
+  CODEX_FOLLOWUP_HAST_PROPERTIES,
+  codexFollowupFromHastProperties,
   remarkCodexDirectives,
   renderCodexInlineDirectivesAsMarkdown,
+  type CodexFollowup,
 } from "@t3tools/client-runtime/codex-markdown-directives";
 import { renderSkillInlineMarkdownChildren } from "./chat/SkillInlineText";
 import {
@@ -204,6 +207,8 @@ interface ChatMarkdownProps {
   parseRawHtml?: boolean;
   /** Append a prompt that invokes a newly created artifact-template skill. */
   onUseArtifactTemplate?: ((template: CodexArtifactTemplate) => void) | undefined;
+  /** Add a Codex follow-up suggestion to the composer without sending it. */
+  onUseCodexFollowup?: ((prompt: string) => void) | undefined;
   /** Directory that anchors relative links and images; defaults to `cwd`. Set
       to the file's own directory when rendering a markdown file. */
   imageBaseDir?: string | undefined;
@@ -304,6 +309,27 @@ function CodexArtifactTemplateCard(props: {
         </Button>
       ) : null}
     </div>
+  );
+}
+
+function CodexFollowupChip(props: {
+  readonly followup: CodexFollowup;
+  readonly onUse?: ((prompt: string) => void) | undefined;
+}) {
+  if (!props.onUse) return <span>{props.followup.label}</span>;
+
+  return (
+    <Button
+      type="button"
+      size="sm"
+      variant="outline"
+      aria-label={`Use follow-up: ${props.followup.label}`}
+      className="chat-markdown-codex-followup mx-0.5 my-0.5 h-auto max-w-full whitespace-normal px-2 py-1 text-left align-baseline text-xs"
+      data-markdown-copy={props.followup.label}
+      onClick={() => props.onUse?.(props.followup.prompt)}
+    >
+      {props.followup.label}
+    </Button>
   );
 }
 
@@ -444,6 +470,7 @@ const CHAT_MARKDOWN_SANITIZE_SCHEMA = {
     code: [...(defaultSchema.attributes?.code ?? []), "dataCodeMeta", "dataInlineCode"],
     blockquote: [...(defaultSchema.attributes?.blockquote ?? []), "dataAlert"],
     div: [...(defaultSchema.attributes?.div ?? []), ...CODEX_ARTIFACT_TEMPLATE_HAST_PROPERTIES],
+    span: [...(defaultSchema.attributes?.span ?? []), ...CODEX_FOLLOWUP_HAST_PROPERTIES],
     a: [...(defaultSchema.attributes?.a ?? []), "dataPullRequestAutolink"],
     img: [
       ...(defaultSchema.attributes?.img ?? []),
@@ -2187,6 +2214,7 @@ function useChatMarkdownState({
   isStreaming = false,
   skills = EMPTY_MARKDOWN_SKILLS,
   onUseArtifactTemplate,
+  onUseCodexFollowup,
   imageBaseDir,
   onImageExpand,
 }: ChatMarkdownProps) {
@@ -2585,6 +2613,7 @@ function useChatMarkdownState({
       markdownFileLinkMetaByHref,
       onTaskListChange,
       onUseArtifactTemplate,
+      onUseCodexFollowup,
       openChangeRequestLink,
       openDeferredMarkdownLink,
       openExternalLinkInPreview,
@@ -2612,6 +2641,7 @@ function useChatMarkdownState({
       markdownFileLinkMetaByHref,
       onTaskListChange,
       onUseArtifactTemplate,
+      onUseCodexFollowup,
       openChangeRequestLink,
       openDeferredMarkdownLink,
       openExternalLinkInPreview,
@@ -2652,6 +2682,14 @@ const CHAT_MARKDOWN_COMPONENTS = {
       );
     }
     return <div {...props}>{children}</div>;
+  },
+  span: function MarkdownSpan({ node, children, ...props }) {
+    const { onUseCodexFollowup } = use(ChatMarkdownRendererContext);
+    const followup = codexFollowupFromHastProperties(node?.properties);
+    if (followup) {
+      return <CodexFollowupChip followup={followup} onUse={onUseCodexFollowup} />;
+    }
+    return <span {...props}>{children}</span>;
   },
   p: function MarkdownParagraph({ node: _node, children, ...props }) {
     const { skills } = use(ChatMarkdownRendererContext);

@@ -32,6 +32,17 @@ export const CODEX_ARTIFACT_TEMPLATE_HAST_PROPERTIES = [
   "dataSkillName",
 ] as const;
 
+export const CODEX_FOLLOWUP_HAST_PROPERTIES = [
+  "dataCodexFollowup",
+  "dataFollowupLabel",
+  "dataFollowupPrompt",
+] as const;
+
+export interface CodexFollowup {
+  readonly label: string;
+  readonly prompt: string;
+}
+
 interface MarkdownPosition {
   readonly start: { readonly offset?: number };
   readonly end: { readonly offset?: number };
@@ -46,6 +57,7 @@ interface MarkdownAstNode {
   position?: MarkdownPosition;
   data?: {
     codexArtifactTemplate?: CodexArtifactTemplate;
+    codexFollowup?: CodexFollowup;
     codexInlineMarkdown?: string;
     hName?: string;
     hProperties?: Record<string, unknown>;
@@ -204,22 +216,27 @@ function renderFileCitation(node: MarkdownAstNode, source: string, insideLink: b
 }
 
 function renderFollowup(node: MarkdownAstNode, source: string, insideLink: boolean): void {
-  const prompt = node.attributes?.prompt;
-  const label = node.children?.length === 1 ? node.children[0]?.value : undefined;
-  if (
-    insideLink ||
-    typeof prompt !== "string" ||
-    prompt.trim().length === 0 ||
-    typeof label !== "string" ||
-    label.trim().length === 0
-  ) {
+  const promptValue = node.attributes?.prompt;
+  const labelValue = node.children?.length === 1 ? node.children[0]?.value : undefined;
+  const prompt = typeof promptValue === "string" ? promptValue.trim() : "";
+  const label = typeof labelValue === "string" ? labelValue.trim() : "";
+  if (insideLink || prompt.length === 0 || label.length === 0) {
     restoreTextDirective(node, source);
     return;
   }
 
   node.type = "text";
   node.value = label;
-  node.data = { codexInlineMarkdown: label };
+  node.data = {
+    codexFollowup: { label, prompt },
+    codexInlineMarkdown: label,
+    hName: "span",
+    hProperties: {
+      dataCodexFollowup: "true",
+      dataFollowupLabel: label,
+      dataFollowupPrompt: prompt,
+    },
+  };
   delete node.name;
   delete node.attributes;
   delete node.url;
@@ -300,6 +317,7 @@ interface DirectiveMatch {
   readonly start: number;
   readonly end: number;
   readonly markdown?: string;
+  readonly followup?: CodexFollowup;
   readonly template?: CodexArtifactTemplate;
 }
 
@@ -308,7 +326,12 @@ function collectDirectiveMatches(node: MarkdownAstNode, matches: DirectiveMatch[
   const end = node.position?.end.offset;
   if (start !== undefined && end !== undefined) {
     if (node.data?.codexInlineMarkdown !== undefined) {
-      matches.push({ start, end, markdown: node.data.codexInlineMarkdown });
+      matches.push({
+        start,
+        end,
+        markdown: node.data.codexInlineMarkdown,
+        ...(node.data.codexFollowup === undefined ? {} : { followup: node.data.codexFollowup }),
+      });
       return;
     }
     if (node.data?.codexArtifactTemplate !== undefined) {
@@ -344,7 +367,9 @@ export function renderCodexInlineDirectivesAsMarkdown(markdown: string): string 
     return markdown;
   }
 
-  return renderDirectiveMatches(markdown, (match) => match.markdown);
+  return renderDirectiveMatches(markdown, (match) =>
+    match.followup === undefined ? match.markdown : codexFollowupMarkdown(match.followup),
+  );
 }
 
 /** Matches the Markdown emitted when users copy rendered Codex directive UI. */
@@ -358,10 +383,71 @@ export function renderCodexDirectivesForCopy(markdown: string): string {
   }
 
   return renderDirectiveMatches(markdown, (match) => {
+    if (match.followup !== undefined) return match.followup.label;
     if (match.markdown !== undefined) return match.markdown;
     if (match.template === undefined) return undefined;
     return `${match.template.displayName} (${codexArtifactTemplatePresentationLabel(match.template.artifactKind)})`;
   });
+}
+
+const CODEX_FOLLOWUP_HREF_PREFIX = "t3-followup:";
+
+function markdownLinkLabel(value: string): string {
+  return value.replaceAll("\\", "\\\\").replaceAll("[", "\\[").replaceAll("]", "\\]");
+}
+
+function encodeCodexFollowupPrompt(prompt: string): string | null {
+  try {
+    return encodeURIComponent(prompt).replace(
+      /[!'()*]/g,
+      (character) => `%${character.charCodeAt(0).toString(16).toUpperCase()}`,
+    );
+  } catch {
+    return null;
+  }
+}
+
+function codexFollowupMarkdown(followup: CodexFollowup): string {
+  const encodedPrompt = encodeCodexFollowupPrompt(followup.prompt);
+  if (encodedPrompt === null) return followup.label;
+  return `[${markdownLinkLabel(followup.label)}](${CODEX_FOLLOWUP_HREF_PREFIX}${encodedPrompt})`;
+}
+
+export function codexFollowupPromptFromHref(href: string): string | null {
+  if (!href.startsWith(CODEX_FOLLOWUP_HREF_PREFIX)) return null;
+  try {
+    const prompt = decodeURIComponent(href.slice(CODEX_FOLLOWUP_HREF_PREFIX.length)).trim();
+    return prompt.length === 0 ? null : prompt;
+  } catch {
+    return null;
+  }
+}
+
+export function appendCodexFollowupPrompt(draft: string, prompt: string): string {
+  const trimmedDraft = draft.trimEnd();
+  const promptStart = trimmedDraft.length - prompt.length;
+  const alreadyEndsWithPrompt =
+    promptStart >= 0 &&
+    trimmedDraft.slice(promptStart) === prompt &&
+    (promptStart === 0 || /\s/.test(trimmedDraft[promptStart - 1] ?? ""));
+  if (alreadyEndsWithPrompt) return draft;
+
+  const needsLeadingSpace = draft.length > 0 && !/\s$/.test(draft);
+  return `${draft}${needsLeadingSpace ? " " : ""}${prompt}`;
+}
+
+export function codexFollowupFromHastProperties(
+  properties: Readonly<Record<string, unknown>> | null | undefined,
+): CodexFollowup | null {
+  if (properties?.dataCodexFollowup !== "true") return null;
+  const label = properties.dataFollowupLabel;
+  const prompt = properties.dataFollowupPrompt;
+  return typeof label === "string" &&
+    label.length > 0 &&
+    typeof prompt === "string" &&
+    prompt.length > 0
+    ? { label, prompt }
+    : null;
 }
 
 /** Native renderers split cards out because they cannot host a view inside Markdown text. */

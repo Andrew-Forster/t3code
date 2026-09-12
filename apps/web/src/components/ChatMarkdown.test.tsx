@@ -559,13 +559,30 @@ describe("ChatMarkdown Codex follow-ups", () => {
   const followup =
     ':codex-followup[Prepare print version]{prompt="Prepare the document for printing."}';
 
-  it.each([true, false])("renders the visible label with parseRawHtml=%s", (parseRawHtml) => {
+  it.each([true, false])("renders a passive label with parseRawHtml=%s", (parseRawHtml) => {
     const html = renderToStaticMarkup(
       <ChatMarkdown cwd="/tmp/project" text={`- ${followup}`} parseRawHtml={parseRawHtml} />,
     );
 
-    expect(html).toContain("<li>Prepare print version</li>");
+    expect(html).toContain("<li><span>Prepare print version</span></li>");
     expect(html).not.toContain("codex-followup");
+    expect(html).not.toContain("Prepare the document for printing.");
+  });
+
+  it.each([true, false])("renders a composer action with parseRawHtml=%s", (parseRawHtml) => {
+    const html = renderToStaticMarkup(
+      <ChatMarkdown
+        cwd="/tmp/project"
+        text={followup}
+        parseRawHtml={parseRawHtml}
+        onUseCodexFollowup={() => undefined}
+      />,
+    );
+
+    expect(html).toContain("chat-markdown-codex-followup");
+    expect(html).toContain('aria-label="Use follow-up: Prepare print version"');
+    expect(html).toContain(">Prepare print version</button>");
+    expect(html).not.toContain("codex-followup[");
     expect(html).not.toContain("Prepare the document for printing.");
   });
 
