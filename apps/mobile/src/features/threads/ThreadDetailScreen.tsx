@@ -812,6 +812,7 @@ export const ThreadDetailScreen = memo(function ThreadDetailScreen(props: Thread
 
   const handleUseCodexFollowup = useCallback(
     (prompt: string) => {
+      const targetThreadKey = selectedThreadKey;
       const currentDraft = draftMessageRef.current;
       const nextDraft = appendCodexFollowupPrompt(currentDraft, prompt);
       if (nextDraft !== currentDraft) {
@@ -819,11 +820,12 @@ export const ThreadDetailScreen = memo(function ThreadDetailScreen(props: Thread
         props.onChangeDraftMessage(nextDraft);
       }
       requestAnimationFrame(() => {
+        if (selectedThreadKeyRef.current !== targetThreadKey) return;
         composerEditorRef.current?.focus();
         composerEditorRef.current?.setSelection({ start: nextDraft.length, end: nextDraft.length });
       });
     },
-    [props.onChangeDraftMessage],
+    [props.onChangeDraftMessage, selectedThreadKey],
   );
 
   const handleScrollToEnd = useCallback(() => {
