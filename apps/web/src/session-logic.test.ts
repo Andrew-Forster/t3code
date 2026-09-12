@@ -1093,6 +1093,56 @@ describe("deriveWorkLogEntries", () => {
     expect(entry?.command).toBe(expected);
   });
 
+  it("uses the complete Codex command from a Windows activity without decoding it again", () => {
+    const command =
+      "\"C:\\\\Program Files\\\\PowerShell\\\\7\\\\pwsh.exe\" -NoProfile -Command \"pwd && rg --files -g 'AGENTS.md' -g '\"'!node_modules'\"'\"";
+    const original = "pwd && rg --files -g 'AGENTS.md' -g '!node_modules'";
+    const [entry] = deriveWorkLogEntries([
+      makeActivity({
+        kind: "tool.completed",
+        summary: "Ran command",
+        payload: {
+          itemType: "command_execution",
+          data: {
+            item: {
+              command,
+              commandActions: [{ type: "unknown", command: original }],
+            },
+          },
+        },
+      }),
+    ]);
+    expect(entry?.command).toBe(original);
+    expect(entry?.rawCommand).toBe(command);
+  });
+
+  it.each([
+    [{ type: "read", command: "cat file" }],
+    [
+      { type: "unknown", command: "cat file" },
+      { type: "unknown", command: "echo done" },
+    ],
+    [{ type: "unknown", command: " " }],
+    [null],
+  ])("does not substitute incomplete command actions: %j", (...commandActions) => {
+    const [entry] = deriveWorkLogEntries([
+      makeActivity({
+        kind: "tool.completed",
+        summary: "Ran command",
+        payload: {
+          itemType: "command_execution",
+          data: {
+            item: {
+              command: "cd folder && cat file",
+              commandActions,
+            },
+          },
+        },
+      }),
+    ]);
+    expect(entry?.command).toBe("cd folder && cat file");
+  });
+
   it("unwraps PowerShell command wrappers for displayed command text", () => {
     const activities: OrchestrationThreadActivity[] = [
       makeActivity({

@@ -1362,6 +1362,7 @@ function toRawToolCommand(value: unknown, normalizedCommand: string | null): str
   return formatted === normalizedCommand ? null : formatted;
 }
 
+// Codex's single unknown action retains the full script; parsed read/search actions can omit steps.
 function extractToolCommand(payload: Record<string, unknown> | null): {
   command: string | null;
   rawCommand: string | null;
@@ -1370,6 +1371,15 @@ function extractToolCommand(payload: Record<string, unknown> | null): {
   const item = asRecord(data?.item);
   const itemResult = asRecord(item?.result);
   const itemInput = asRecord(item?.input);
+  const actions = item?.commandActions;
+  const action = Array.isArray(actions) && actions.length === 1 ? asRecord(actions[0]) : null;
+  const originalCommand = action?.type === "unknown" ? asTrimmedString(action.command) : null;
+  if (originalCommand) {
+    return {
+      command: originalCommand,
+      rawCommand: toRawToolCommand(item?.command, originalCommand),
+    };
+  }
   const itemType = asTrimmedString(payload?.itemType);
   const detail = asTrimmedString(payload?.detail);
   const candidates: unknown[] = [

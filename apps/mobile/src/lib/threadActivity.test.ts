@@ -2498,6 +2498,38 @@ describe("buildThreadFeed", () => {
     });
   });
 
+  it("uses the complete Codex command from a Windows activity", () => {
+    const command =
+      "\"C:\\\\Program Files\\\\PowerShell\\\\7\\\\pwsh.exe\" -NoProfile -Command \"pwd && rg --files -g 'AGENTS.md' -g '\"'!node_modules'\"'\"";
+    const original = "pwd && rg --files -g 'AGENTS.md' -g '!node_modules'";
+    const thread = makeThread({
+      id: ThreadId.make("windows-command"),
+      projectId: ProjectId.make("project-1"),
+      title: "Windows command",
+      activities: [
+        makeActivity({
+          id: EventId.make("windows-command"),
+          createdAt: "2026-04-01T00:00:01.000Z",
+          kind: "tool.completed",
+          summary: "Ran command",
+          payload: {
+            itemType: "command_execution",
+            data: {
+              item: {
+                command,
+                commandActions: [{ type: "unknown", command: original }],
+              },
+            },
+          },
+        }),
+      ],
+    });
+    expect(buildThreadFeed(thread)[0]).toMatchObject({
+      type: "activity-group",
+      activities: [{ workEntry: { command: original, rawCommand: command } }],
+    });
+  });
+
   it("preserves serialized shell wrappers with non-matching boundary quotes", () => {
     const turnId = TurnId.make("turn-serialized-shell-wrapper");
     const command =
