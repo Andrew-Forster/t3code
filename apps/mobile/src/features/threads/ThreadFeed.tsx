@@ -25,6 +25,7 @@ import {
 import { resolveViewedImageAsset } from "@t3tools/client-runtime/work-log/presentation";
 import {
   codexFollowupPromptFromHref,
+  renderCodexDirectivesForCopy,
   renderCodexInlineDirectivesAsMarkdown,
   splitCodexArtifactTemplateMarkdown,
 } from "@t3tools/client-runtime/codex-markdown-directives";
@@ -1646,7 +1647,7 @@ function renderFeedEntry(
           <View className="mt-1 flex-row items-center gap-1">
             <CopyTextButton
               accessibilityLabel="Copy message"
-              text={renderedText}
+              text={renderCodexDirectivesForCopy(renderedText)}
               tintColor={iconSubtleColor}
               buttonSize={28}
               iconSize={13}
