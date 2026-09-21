@@ -180,9 +180,9 @@ import {
   WORKSPACE_BASENAME_LOOKUP_LIMIT,
 } from "../workspaceBasenameLookup";
 import {
-  findProjectForChangeRequest,
   parseChangeRequestUrl,
   pullRequestCandidateUrlFromReferenceAutolink,
+  resolvePullRequestPreviewTarget,
   useOpenChangeRequestLink,
 } from "~/lib/openPullRequestLink";
 import { useOpenLink } from "../browser/useOpenLink";
@@ -889,7 +889,10 @@ function MarkdownDetails({
         <span>{summary}</span>
       </CollapsibleTrigger>
       <CollapsiblePanel>
-        <div className="pb-3 ps-6 text-foreground/80" data-markdown-details-content="">
+        <div
+          className="pb-3 ps-6 text-foreground/[calc(80%+var(--appearance-contrast-boost)/5)]"
+          data-markdown-details-content=""
+        >
           {content}
         </div>
       </CollapsiblePanel>
@@ -2923,31 +2926,14 @@ const CHAT_MARKDOWN_COMPONENTS = {
       const confirmBeforeOpen = pullRequestAutolink === "reference";
       const pullRequestCandidateUrl =
         confirmBeforeOpen && href ? pullRequestCandidateUrlFromReferenceAutolink(href) : href;
-      const pullRequestCandidate = pullRequestCandidateUrl
-        ? parseChangeRequestUrl(pullRequestCandidateUrl)
+      const pullRequestPreviewTarget = pullRequestCandidateUrl
+        ? resolvePullRequestPreviewTarget({
+            environmentId,
+            projects,
+            pullRequestsEnabled: serverConfig?.environment.capabilities.pullRequests === true,
+            url: pullRequestCandidateUrl,
+          })
         : null;
-      const pullRequestProject =
-        environmentId !== null &&
-        serverConfig?.environment.capabilities.pullRequests === true &&
-        pullRequestCandidate !== null
-          ? findProjectForChangeRequest(
-              projects.filter((project) => project.environmentId === environmentId),
-              pullRequestCandidate,
-            )
-          : undefined;
-      const pullRequestPreviewTarget =
-        environmentId === null || pullRequestProject === undefined || pullRequestCandidate === null
-          ? null
-          : {
-              environmentId,
-              input: {
-                projectId: pullRequestProject.id,
-                repository:
-                  pullRequestProject.repositoryIdentity?.displayName ??
-                  pullRequestCandidate.repository,
-                number: pullRequestCandidate.number,
-              },
-            };
       const isSameDocumentLink = href?.startsWith("#") ?? false;
       const onClick = props.onClick;
       const canOpenInPreview = Boolean(threadRef) && isPreviewSupportedInRuntime();
@@ -3368,7 +3354,7 @@ function ChatMarkdown({
     <div
       ref={markdownRef}
       className={cn(
-        "chat-markdown w-full min-w-0 text-sm leading-relaxed text-foreground/80 [overflow-wrap:anywhere] [word-break:break-word]",
+        "chat-markdown w-full min-w-0 text-sm leading-relaxed text-foreground/[calc(80%+var(--appearance-contrast-boost)/5)] [overflow-wrap:anywhere] [word-break:break-word]",
         className,
       )}
       // Gates the fade-in for blocks that arrive while the response streams.
