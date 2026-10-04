@@ -242,6 +242,7 @@ export interface RetryWorkspacePreparationInput extends ThreadCommandInput {
 }
 
 export interface EditQueuedRunInput extends ThreadCommandInput {
+  readonly editId?: CommandId;
   readonly runId: RunId;
   readonly text: string;
   /**
@@ -1010,6 +1011,7 @@ export const editQueuedRun = Effect.fn("EnvironmentCommands.editQueuedRun")(func
     threadId: input.threadId,
     runId: input.runId,
     text: input.text,
+    ...(input.editId === undefined ? {} : { editId: input.editId }),
     ...(attachments === undefined ? {} : { attachments }),
     ...(input.edit?.context && attachments
       ? {
@@ -1020,6 +1022,42 @@ export const editQueuedRun = Effect.fn("EnvironmentCommands.editQueuedRun")(func
           ),
         }
       : {}),
+  });
+});
+
+export interface BeginQueuedRunEditInput extends ThreadCommandInput {
+  readonly runId: RunId;
+  readonly previousEditId: CommandId | null;
+}
+
+export interface CancelQueuedRunEditInput extends ThreadCommandInput {
+  readonly runId: RunId;
+  readonly editId: CommandId;
+}
+
+export const beginQueuedRunEdit = Effect.fn("EnvironmentCommands.beginQueuedRunEdit")(function* (
+  input: BeginQueuedRunEditInput,
+) {
+  const commandId = yield* allocateCommandId(input);
+  yield* dispatch({
+    type: "queued-run.edit.begin",
+    commandId,
+    threadId: input.threadId,
+    runId: input.runId,
+    previousEditId: input.previousEditId,
+  });
+  return commandId;
+});
+
+export const cancelQueuedRunEdit = Effect.fn("EnvironmentCommands.cancelQueuedRunEdit")(function* (
+  input: CancelQueuedRunEditInput,
+) {
+  return yield* dispatch({
+    type: "queued-run.edit.cancel",
+    commandId: yield* allocateCommandId(input),
+    threadId: input.threadId,
+    runId: input.runId,
+    editId: input.editId,
   });
 });
 

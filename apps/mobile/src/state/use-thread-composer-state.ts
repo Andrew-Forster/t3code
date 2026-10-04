@@ -195,6 +195,7 @@ export function useThreadComposerState() {
     label: "edit queued message",
     reportFailure: false,
   });
+  const cancelQueuedEdit = useAtomCommand(threadEnvironment.cancelQueuedRunEdit);
   const [isSavingQueuedEdit, setIsSavingQueuedEdit] = useState(false);
   const savingQueuedEditRef = useRef(false);
   const pastedTextFileNamesRef = useRef<{ threadKey: string | null; names: Set<string> }>({
@@ -432,7 +433,7 @@ export function useThreadComposerState() {
     if (selectedThreadKey === null || editedRunId === null || selectedThreadRuns === undefined) {
       return;
     }
-    if (savingQueuedEditRef.current) return;
+    if (isSavingQueuedEdit || savingQueuedEditRef.current) return;
     const stillQueued = selectedThreadRuns.some(
       (run) => run.id === editedRunId && run.status === "queued",
     );
@@ -457,17 +458,34 @@ export function useThreadComposerState() {
         ? "That message already started. Your edit is back in the composer."
         : "That message already started, so the edit was discarded.",
     );
-  }, [editedRunId, selectedThreadKey, selectedThreadRuns]);
+  }, [editedRunId, isSavingQueuedEdit, selectedThreadKey, selectedThreadRuns]);
 
   const activeThreadBusy = threadRuntimeIsActive(selectedThreadRuntime);
   const interruptibleRunId = threadRuntimeHasInterruptibleRun(selectedThreadRuntime)
     ? (selectedThreadRuntime?.activeRunId ?? null)
     : null;
 
-  const cancelQueuedRunEdit = useCallback(() => {
-    if (selectedThreadKey === null || savingQueuedEditRef.current) return;
-    endQueuedRunEdit(selectedThreadKey);
-  }, [selectedThreadKey]);
+  const cancelQueuedRunEdit = useCallback(async () => {
+    if (selectedThreadKey === null || !selectedThreadShell || savingQueuedEditRef.current) return;
+    const edit = getQueuedRunEdit(selectedThreadKey);
+    if (edit === null) return;
+    savingQueuedEditRef.current = true;
+    setIsSavingQueuedEdit(true);
+    try {
+      const currentRun = selectedThreadRuns?.find((run) => run.id === edit.runId);
+      const result =
+        currentRun?.queueEditId != null && currentRun.queueEditId !== edit.editId
+          ? null
+          : await cancelQueuedEdit({
+              environmentId: selectedThreadShell.environmentId,
+              input: { threadId: selectedThreadShell.id, runId: edit.runId, editId: edit.editId },
+            });
+      if (result === null || result._tag === "Success") endQueuedRunEdit(selectedThreadKey);
+    } finally {
+      savingQueuedEditRef.current = false;
+      setIsSavingQueuedEdit(false);
+    }
+  }, [cancelQueuedEdit, selectedThreadKey, selectedThreadRuns, selectedThreadShell]);
 
   const onRemoveQueuedEditAttachment = useCallback(
     (attachmentId: string) => {
@@ -521,6 +539,7 @@ export function useThreadComposerState() {
         input: {
           threadId: thread.id,
           runId: edit.runId,
+          editId: edit.editId,
           text,
           edit: {
             messageId: edit.messageId,
