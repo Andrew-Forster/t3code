@@ -17,7 +17,7 @@ import * as EventSink from "./EventSink.ts";
 import * as Orchestrator from "./Orchestrator.ts";
 import * as ProviderAdapterRegistry from "./ProviderAdapterRegistry.ts";
 import type { ProviderAdapterV2Shape } from "./ProviderAdapter.ts";
-import { makeOrchestratorV2ReplayLayerWithRegistry } from "./testkit/ProviderReplayHarness.ts";
+import * as ProviderReplayHarness from "./testkit/ProviderReplayHarness.ts";
 
 const modelSelection = { instanceId: ProviderInstanceId.make("codex"), model: "test" };
 const adapter = {
@@ -27,7 +27,7 @@ const adapter = {
   planSelectionTransition: () => Effect.succeed({ type: "apply_on_next_turn" as const }),
   openSession: () => Effect.die("provider execution is disabled in queue editing tests"),
 } as ProviderAdapterV2Shape;
-const layer = makeOrchestratorV2ReplayLayerWithRegistry(
+const layer = ProviderReplayHarness.layerWithRegistry(
   { name: "queued-run-editing" },
   ProviderAdapterRegistry.layerFromAdapters([adapter]),
   { runEffectWorker: false },
