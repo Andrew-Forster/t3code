@@ -58,6 +58,19 @@ extra authority: [every RPC declares a required
 scope](../../apps/server/src/auth/RpcAuthorization.ts), and the WebSocket RPC
 group's `RpcScopeAuthorization` middleware checks it before any handler runs.
 
+Scope changes must not prevent older clients from connecting. Token exchange
+intersects recognized requests with the pairing grant; retired and unknown names
+are dropped. A request with no granted scopes fails before consuming the link.
+Stored credentials are never expanded when scopes split.
+
+Auth responses keep `scopes` within the original wire vocabulary and include
+`permissions` for the exact grant. New clients use `permissions` when present,
+even if empty. Older servers omit it, so clients use legacy parent checks for
+features those servers already support. These client checks never change server
+authorization. Permission errors likewise retain a legacy `requiredScope` and
+add the exact `requiredPermission`, so a denied RPC stays decodable by old clients.
+Unknown response permissions are ignored; grant inputs stay strict.
+
 Desktop restarts forget the previous local bearer token, so its reusable
 bootstrap grant replaces earlier sessions for the same subject and method.
 Revocation and insertion share a [database
@@ -87,7 +100,7 @@ after 30 days.
 ## The environment is the filesystem boundary
 
 Projects are organizational boundaries, not filesystem sandboxes.
-`orchestration:read` permits reading files the server account can read, including
+`filesystem:read` permits reading files the server account can read, including
 absolute paths outside a project. This lets clients display artifacts that an
 agent writes in a temporary directory. Relative paths and writes still follow
 the [workspace path rules](../../apps/server/src/workspace/WorkspaceFileSystem.ts).
@@ -99,7 +112,9 @@ file's identity when serving it, so atomic replacement requires a new URL while
 editing the same file in place does not. An HTML file authorized this way cannot
 load sibling assets; directory-scoped workspace previews are a separate grant.
 Clients should share the authored file reference so they do not disclose the
-temporary URL's credential.
+temporary URL's credential. `filesystem:read` is checked when the URL is minted,
+not when it is served: a URL issued before the grant was revoked keeps working
+until it expires, and it is not bound to the session that minted it.
 
 Host videos can change in place. Their [HTTP
 responses](../../apps/server/src/http.ts) omit cache validators because file
