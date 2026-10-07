@@ -756,7 +756,7 @@ describe("V2 environment commands", () => {
         { type: "queued-run.edit", editId, text: "Revised" },
         { type: "queued-run.edit.cancel", editId },
       ]);
-    }).pipe(Effect.provide(TEST_CRYPTO_LAYER)),
+    }).pipe(Effect.provide(layerTestCrypto)),
   );
 
   it.effect("delegates model selection to the server without fetching the full projection", () =>

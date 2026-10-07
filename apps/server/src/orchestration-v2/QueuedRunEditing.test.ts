@@ -29,7 +29,7 @@ const adapter = {
 } as ProviderAdapterV2Shape;
 const layer = makeOrchestratorV2ReplayLayerWithRegistry(
   { name: "queued-run-editing" },
-  ProviderAdapterRegistry.makeLayer([adapter]),
+  ProviderAdapterRegistry.layerFromAdapters([adapter]),
   { runEffectWorker: false },
 );
 
