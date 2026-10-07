@@ -4723,7 +4723,7 @@ export default function ChatView(props: ChatViewProps) {
     try {
       const currentRun = serverProjection?.runs.find((run) => run.id === editingQueuedRun.runId);
       const result =
-        currentRun?.queueEditId != null && currentRun.queueEditId !== editingQueuedRun.editId
+        currentRun !== undefined && currentRun.queueEditId !== editingQueuedRun.editId
           ? null
           : await cancelQueuedRunEditCommand({
               environmentId,
@@ -4762,8 +4762,8 @@ export default function ChatView(props: ChatViewProps) {
           },
     );
   }, []);
-  // Exit edit mode when the edited run leaves the queue (it started, or was
-  // cancelled from another client). A dirty edit moves into the thread's own
+  // Exit edit mode when the run leaves the queue or another client ends or
+  // takes over its edit. A dirty edit moves into the thread's own
   // draft when that draft is empty; otherwise it is dropped with a toast.
   useEffect(() => {
     if (editingQueuedRun === null) return;
@@ -4774,7 +4774,7 @@ export default function ChatView(props: ChatViewProps) {
     if (serverProjection === null || isSavingQueuedEdit || queuedEditSaveInFlightRef.current)
       return;
     const run = serverProjection.runs.find((candidate) => candidate.id === editingQueuedRun.runId);
-    if (run?.status === "queued") return;
+    if (run?.status === "queued" && run.queueEditId === editingQueuedRun.editId) return;
     const recovery = recoverQueuedMessageEdit({
       editTarget: queuedEditDraftTargetFor(editingQueuedRun.runId),
       threadTarget: baseComposerDraftTarget,
@@ -4784,7 +4784,7 @@ export default function ChatView(props: ChatViewProps) {
       toastManager.add(
         stackedThreadToast({
           type: "info",
-          title: "Queued message is no longer queued",
+          title: "Queued message edit ended",
           description: "Your unsaved edit was kept in the composer.",
         }),
       );
@@ -4792,7 +4792,7 @@ export default function ChatView(props: ChatViewProps) {
       toastManager.add(
         stackedThreadToast({
           type: "warning",
-          title: "Queued message is no longer queued",
+          title: "Queued message edit ended",
           description: "Your unsaved edit was discarded.",
         }),
       );

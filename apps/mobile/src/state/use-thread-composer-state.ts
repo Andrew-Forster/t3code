@@ -427,20 +427,22 @@ export function useThreadComposerState() {
     [selectedThreadProjection],
   );
 
-  // The run can start, or be cancelled from another client, while its message
-  // is open in the composer. Leave edit mode rather than saving into a run the
+  // Another client can start or cancel the run, or end or take over its edit,
+  // while its message is open. Leave edit mode rather than saving into a run the
   // server will refuse, and keep whatever was typed if there is room for it.
   const selectedThreadRuns = selectedThreadProjection?.projection.runs;
   const editedRunId = queuedRunEdit?.runId ?? null;
+  const editedRunEditId = queuedRunEdit?.editId ?? null;
   useEffect(() => {
     if (selectedThreadKey === null || editedRunId === null || selectedThreadRuns === undefined) {
       return;
     }
     if (isSavingQueuedEdit || savingQueuedEditRef.current) return;
-    const stillQueued = selectedThreadRuns.some(
-      (run) => run.id === editedRunId && run.status === "queued",
+    const stillOwned = selectedThreadRuns.some(
+      (run) =>
+        run.id === editedRunId && run.status === "queued" && run.queueEditId === editedRunEditId,
     );
-    if (stillQueued) return;
+    if (stillOwned) return;
     const editDraftKey = queuedEditDraftKey(selectedThreadKey, editedRunId);
     const editDraft = getComposerDraftSnapshot(editDraftKey);
     const threadDraft = getComposerDraftSnapshot(selectedThreadKey);
@@ -459,10 +461,10 @@ export function useThreadComposerState() {
     setThreadComposerError(
       selectedThreadKey,
       keepable
-        ? "That message already started. Your edit is back in the composer."
-        : "That message already started, so the edit was discarded.",
+        ? "That queued message edit ended. Your edit is back in the composer."
+        : "That queued message edit ended, so the edit was discarded.",
     );
-  }, [editedRunId, isSavingQueuedEdit, selectedThreadKey, selectedThreadRuns]);
+  }, [editedRunId, editedRunEditId, isSavingQueuedEdit, selectedThreadKey, selectedThreadRuns]);
 
   const activeThreadBusy = threadRuntimeIsActive(selectedThreadRuntime);
   const interruptibleRunId = threadRuntimeHasInterruptibleRun(selectedThreadRuntime)
@@ -478,7 +480,7 @@ export function useThreadComposerState() {
     try {
       const currentRun = selectedThreadRuns?.find((run) => run.id === edit.runId);
       const result =
-        currentRun?.queueEditId != null && currentRun.queueEditId !== edit.editId
+        currentRun !== undefined && currentRun.queueEditId !== edit.editId
           ? null
           : await cancelQueuedEdit({
               environmentId: selectedThreadShell.environmentId,
