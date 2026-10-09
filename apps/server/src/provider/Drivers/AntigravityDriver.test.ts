@@ -29,10 +29,13 @@ import {
   ANTIGRAVITY_AUTH_STDOUT_PREFIX,
   resolveAntigravityInstanceDirectories,
 } from "../antigravityAuthSupport.ts";
-import * as ProviderEventLoggers from "../ProviderEventLoggers.ts";
+import * as ProviderEventLoggers from "@t3tools/provider-core/server/ProviderEventLoggers";
+import * as McpProviderSessions from "@t3tools/provider-core/server/McpProviderSessions";
 import * as ModelManifest from "../ModelManifest.ts";
-import * as IdAllocator from "../../orchestration-v2/IdAllocator.ts";
+import * as IdAllocator from "@t3tools/provider-core/server/IdAllocator";
 import { AntigravityDriver } from "./AntigravityDriver.ts";
+import * as ProviderHostLive from "../ProviderHostLive.ts";
+import * as ServerSecretStore from "../../auth/ServerSecretStore.ts";
 
 const hostPlatform = HostProcessPlatform.defaultValue();
 const windowsHost = hostPlatform === "win32";
@@ -244,7 +247,7 @@ const makeHarness = Effect.fn("makeAntigravityDriverHarness")(function* (
   };
 });
 
-const layerTest = ServerConfig.layerTest(process.cwd(), {
+const layerDeps = ServerConfig.layerTest(process.cwd(), {
   prefix: "t3-antigravity-driver-config-",
 }).pipe(
   Layer.provideMerge(NodeServices.layer),
@@ -262,6 +265,11 @@ const layerTest = ServerConfig.layerTest(process.cwd(), {
   ),
   Layer.provideMerge(ModelManifest.layerTest),
   Layer.provideMerge(IdAllocator.layer),
+  Layer.provideMerge(McpProviderSessions.layer),
+);
+const layerTest = ProviderHostLive.layer.pipe(
+  Layer.provideMerge(ServerSecretStore.layer),
+  Layer.provideMerge(layerDeps),
 );
 
 it.layer(layerTest)("AntigravityDriver", (it) => {
