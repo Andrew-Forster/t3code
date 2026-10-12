@@ -1,104 +1,130 @@
 import { assert, it } from "@effect/vitest";
-import {
-  CommandId,
-  EventId,
-  MessageId,
-  ProjectId,
-  ProviderDriverKind,
-  ProviderInstanceId,
-  ThreadId,
-} from "@t3tools/contracts";
+import { CommandId, EventId, RunId, TurnItemId } from "@t3tools/contracts";
 import * as DateTime from "effect/DateTime";
 import * as Effect from "effect/Effect";
 import * as Exit from "effect/Exit";
-import type { ProviderAdapterV2 } from "@t3tools/provider-core/server/ProviderAdapter";
+import * as Queue from "effect/Queue";
+import * as Stream from "effect/Stream";
 
-import { CodexProviderCapabilitiesV2 } from "./Adapters/CodexAdapterV2.ts";
 import * as EventSink from "./EventSink.ts";
-import * as Orchestrator from "./Orchestrator.ts";
-import * as ProviderAdapterRegistry from "./ProviderAdapterRegistry.ts";
-import * as ProviderReplayHarness from "./testkit/ProviderReplayHarness.ts";
 
-const modelSelection = { instanceId: ProviderInstanceId.make("codex"), model: "test" };
-const adapter = {
-  instanceId: modelSelection.instanceId,
-  driver: ProviderDriverKind.make("codex"),
-  getCapabilities: () => Effect.succeed(CodexProviderCapabilitiesV2),
-  planSelectionTransition: () => Effect.succeed({ type: "apply_on_next_turn" as const }),
-  openSession: () => Effect.die("provider execution is disabled in queue editing tests"),
-} satisfies ProviderAdapterV2["Service"];
-const layer = ProviderReplayHarness.layerWithRegistry(
-  { name: "queued-run-editing" },
-  ProviderAdapterRegistry.layerFromAdapters([adapter]),
-  { runEffectWorker: false },
-);
-
-const createQueue = Effect.fnUntraced(function* (name: string) {
-  const orchestrator = yield* Orchestrator.OrchestratorV2;
-  const sink = yield* EventSink.EventSinkV2;
-  const threadId = ThreadId.make(`thread:${name}`);
-  yield* orchestrator.dispatch({
-    type: "thread.create",
-    commandId: CommandId.make(`${name}:create`),
-    threadId,
-    projectId: ProjectId.make(`project:${name}`),
-    title: name,
-    modelSelection,
-    createdBy: "user",
-    creationSource: "web",
-    runtimeMode: "full-access",
-    interactionMode: "default",
-    branch: null,
-    worktreePath: process.cwd(),
-  });
-  for (const [index, text] of ["Active", "Original", "Later"].entries()) {
-    yield* orchestrator.dispatch({
-      type: "message.dispatch",
-      commandId: CommandId.make(`${name}:message:${index}`),
-      threadId,
-      messageId: MessageId.make(`${name}:message:${index}`),
-      text,
-      attachments: [],
-      createdBy: "user",
-      creationSource: "web",
-      modelSelection,
-      dispatchMode: { type: index === 0 ? "start_immediately" : "queue_after_active" },
-    });
-  }
-  const projection = yield* orchestrator.getThreadProjection(threadId);
-  const [active, queued, later] = projection.runs;
-  assert.isDefined(active);
-  assert.isDefined(queued);
-  assert.isDefined(later);
-  const editId = CommandId.make(`${name}:begin`);
-  const begin = {
-    type: "queued-run.edit.begin" as const,
-    commandId: editId,
-    threadId,
-    runId: queued.id,
-    previousEditId: null,
-  };
-  const complete = Effect.gen(function* () {
-    const now = yield* DateTime.now;
-    yield* sink.write({
-      events: [
-        {
-          id: EventId.make(`${name}:complete`),
-          type: "run.updated",
-          threadId,
-          runId: active.id,
-          providerInstanceId: active.providerInstanceId,
-          occurredAt: now,
-          payload: { ...active, status: "completed", completedAt: now },
-        },
-      ],
-    });
-    yield* orchestrator.resumeQueuedRuns;
-  });
-  return { orchestrator, threadId, active, queued, later, editId, begin, complete };
-});
+import { createQueue, layer } from "./QueuedRunEditing.testkit.ts";
 
 it.layer(layer)("queued message editing", (it) => {
+  it.effect.each([
+    { reason: "provider_error", action: "save" },
+    { reason: "provider_error", action: "cancel" },
+    { reason: "missing_worktree", action: "save" },
+    { reason: "missing_worktree", action: "cancel" },
+  ] as const)(
+    "$action preserves the queue pause after $reason during editing",
+    ({ reason, action }) =>
+      Effect.gen(function* () {
+        const name = `${reason}-${action}`;
+        const { orchestrator, threadId, active, queued, later, editId, begin } = yield* createQueue(
+          name,
+          null,
+        );
+        const sink = yield* EventSink.EventSinkV2;
+        yield* orchestrator.dispatch(begin);
+        const heldRunIds = yield* Queue.unbounded<RunId>();
+        const afterSequence = yield* orchestrator.getThreadEventSequence(threadId);
+        yield* sink.stream({ threadId, afterSequence }).pipe(
+          Stream.runForEach((stored) =>
+            stored.event.type === "run.updated" && stored.event.payload.queueHeld === true
+              ? Queue.offer(heldRunIds, stored.event.payload.id)
+              : Effect.void,
+          ),
+          Effect.forkScoped,
+        );
+        yield* Effect.yieldNow;
+        const now = yield* DateTime.now;
+        yield* sink.write({
+          events: [
+            ...(reason === "provider_error"
+              ? [
+                  {
+                    id: EventId.make(`${name}:error`),
+                    type: "turn-item.updated" as const,
+                    threadId,
+                    runId: active.id,
+                    nodeId: active.rootNodeId!,
+                    providerInstanceId: active.providerInstanceId,
+                    occurredAt: now,
+                    payload: {
+                      id: TurnItemId.make(`${name}:error`),
+                      type: "error" as const,
+                      threadId,
+                      runId: active.id,
+                      nodeId: active.rootNodeId!,
+                      providerThreadId: active.providerThreadId,
+                      providerTurnId: null,
+                      nativeItemRef: null,
+                      parentItemId: null,
+                      ordinal: 2,
+                      status: "failed" as const,
+                      title: "Provider failure",
+                      startedAt: now,
+                      completedAt: now,
+                      updatedAt: now,
+                      failure: {
+                        class: "provider_error" as const,
+                        message: "Provider failed.",
+                        code: "provider_failed",
+                        retryable: null,
+                      },
+                    },
+                  },
+                ]
+              : []),
+            {
+              id: EventId.make(`${name}:terminal`),
+              type: "run.updated",
+              threadId,
+              runId: active.id,
+              providerInstanceId: active.providerInstanceId,
+              occurredAt: now,
+              payload: {
+                ...active,
+                status: reason === "provider_error" ? "failed" : "interrupted",
+                completedAt: now,
+                ...(reason === "missing_worktree"
+                  ? { workspacePreparation: { type: "worktree" as const, baseRef: "main" } }
+                  : {}),
+              },
+            },
+          ],
+        });
+        assert.equal(yield* Queue.take(heldRunIds), queued.id);
+        yield* orchestrator.dispatch(
+          action === "save"
+            ? {
+                type: "queued-run.edit",
+                commandId: CommandId.make(`${name}:finish`),
+                threadId,
+                runId: queued.id,
+                editId,
+                text: "Edited",
+              }
+            : {
+                type: "queued-run.edit.cancel",
+                commandId: CommandId.make(`${name}:finish`),
+                threadId,
+                runId: queued.id,
+                editId,
+              },
+        );
+        const after = yield* orchestrator.getThreadProjection(threadId);
+        for (const id of [queued.id, later.id]) {
+          const run = after.runs.find((candidate) => candidate.id === id);
+          assert.equal(run?.status, "queued");
+          assert.isTrue(run?.queueHeld);
+          assert.isFalse(after.turnItems.some((item) => item.runId === id));
+        }
+        assert.isNull(after.runs.find((run) => run.id === queued.id)?.queueEditId);
+      }),
+  );
+
   it.effect.each(["save", "cancel"] as const)(
     "%s releases an edit only after completion has left the original queued",
     (action) =>

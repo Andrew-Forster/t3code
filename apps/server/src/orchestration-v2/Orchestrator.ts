@@ -1302,7 +1302,7 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
         return;
       }
       const queuedRun = nextQueuedRun(projection);
-      if (queuedRun === undefined || queuedRun.queueEditId != null) {
+      if (queuedRun === undefined) {
         return;
       }
       // A provider that just failed will likely fail the next message too.
@@ -1341,6 +1341,7 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
         );
         return;
       }
+      if (queuedRun.queueEditId != null) return;
       const rootNodeId = queuedRun.rootNodeId;
       const attemptId = queuedRun.activeAttemptId;
       const providerThreadId = queuedRun.providerThreadId;
@@ -7882,7 +7883,9 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
       const projection = yield* projectionStore
         .getThreadRecords(command.threadId, ["runs", "messages"], { messageRoles: ["user"] })
         .pipe(
-          Effect.mapError(() => new OrchestratorProjectionError({ threadId: command.threadId })),
+          Effect.mapError(
+            (cause) => new OrchestratorProjectionError({ threadId: command.threadId, cause }),
+          ),
         );
       const run = projection.runs.find((candidate) => candidate.id === command.runId);
       const message = projection.messages.find((candidate) => candidate.id === run?.userMessageId);

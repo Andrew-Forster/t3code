@@ -168,7 +168,11 @@ export function ThreadQueueSheet({ route }: StaticScreenProps<QueueTarget>) {
     try {
       if (action === "remove") {
         await cancel(buildCancelQueuedRunCommand({ ...target, runId }));
-      } else if (workflow?.activeRun && workflow.canPromoteToSteer) {
+      } else if (
+        workflow?.activeRun &&
+        workflow.canPromoteToSteer &&
+        queuedRuns[index]!.run.queueEditId == null
+      ) {
         await promote({
           ...target,
           input: {
@@ -243,7 +247,7 @@ export function ThreadQueueSheet({ route }: StaticScreenProps<QueueTarget>) {
             : 0;
         const controls = resolveThreadQueueRowControls({
           busy: busyRunId !== null || draggedRunId !== null,
-          canPromoteToSteer: workflow?.canPromoteToSteer ?? false,
+          canPromoteToSteer: workflow?.canPromoteToSteer === true && run.queueEditId == null,
           canReorder: workflow?.canReorder ?? false,
           index,
           isEditing: editing?.runId === run.id,
