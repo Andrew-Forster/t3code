@@ -1287,10 +1287,7 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
       ]);
     });
 
-  const startNextQueuedRun = (
-    threadId: ThreadId,
-    options?: { readonly failedRunId?: RunId; readonly endedRunId?: RunId },
-  ) =>
+  const startNextQueuedRun = (threadId: ThreadId, options?: { readonly resume?: boolean }) =>
     Effect.gen(function* () {
       // Every terminal run checks the queue. Only a deliverable queued run
       // needs the transcript for provider handoff and legacy import context.
@@ -1327,14 +1324,16 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
       // and a message queued for another provider is how users recover.
       // A message queued behind a worktree that was cancelled or never created
       // would run in the project checkout instead, so it waits for the user.
-      const failedRun = latestExecutedRun(projection.runs);
+      // Commands can make the queue eligible before the terminal listener
+      // handles the last run. Only an explicit Resume bypasses its pause.
+      const latestRun = latestExecutedRun(projection.runs);
       const failureClass =
-        failedRun?.id === options?.failedRunId
-          ? latestRootProviderFailure(failedRun, projection.turnItems)?.class
+        options?.resume !== true
+          ? latestRootProviderFailure(latestRun, projection.turnItems)?.class
           : undefined;
       const worktreeMissing =
-        failedRun?.id === options?.endedRunId &&
-        failedRun?.workspacePreparation?.type === "worktree" &&
+        options?.resume !== true &&
+        latestRun?.workspacePreparation?.type === "worktree" &&
         projection.thread.worktreePath === null;
       // A project can turn a provider off while a message waits in the queue,
       // including between a run ending and this check, or while the queue is
@@ -1361,7 +1360,7 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
         instanceDisabledForProject ||
         (failureClass !== undefined &&
           failureClass !== "validation_error" &&
-          failedRun?.providerInstanceId === queuedRun.providerInstanceId)
+          latestRun?.providerInstanceId === queuedRun.providerInstanceId)
       ) {
         const now = yield* DateTime.now;
         yield* writeSystemEvents(
@@ -11157,10 +11156,13 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
       );
       if (
         command.type === "queue.resume" ||
+        command.type === "queued-run.reorder" ||
         command.type === "queued-run.edit.cancel" ||
         (command.type === "queued-run.edit" && command.editId !== undefined)
       ) {
-        yield* mapDispatchError(command)(startNextQueuedRun(command.threadId));
+        yield* mapDispatchError(command)(
+          startNextQueuedRun(command.threadId, { resume: command.type === "queue.resume" }),
+        );
       }
       return {
         sequence: receipt.resultSequence,
@@ -11299,10 +11301,13 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
     }
     if (
       command.type === "queue.resume" ||
+      command.type === "queued-run.reorder" ||
       command.type === "queued-run.edit.cancel" ||
       (command.type === "queued-run.edit" && command.editId !== undefined)
     ) {
-      yield* mapDispatchError(command)(startNextQueuedRun(command.threadId));
+      yield* mapDispatchError(command)(
+        startNextQueuedRun(command.threadId, { resume: command.type === "queue.resume" }),
+      );
     }
     if (command.type === "notification.delivery.accept") {
       yield* mapDispatchError(command)(offerDelegatedCompletionDeliveries(command.threadId));
@@ -11355,20 +11360,7 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
         );
       }
       yield* threadDispatch
-        .withLock(
-          threadId,
-          startNextQueuedRun(
-            threadId,
-            stored.event.type === "run.updated"
-              ? {
-                  endedRunId: stored.event.payload.id,
-                  ...(stored.event.payload.status === "failed"
-                    ? { failedRunId: stored.event.payload.id }
-                    : {}),
-                }
-              : undefined,
-          ),
-        )
+        .withLock(threadId, startNextQueuedRun(threadId))
         .pipe(
           Effect.catchCause((cause) =>
             Effect.logWarning("Failed to start the next queued V2 run", { threadId, cause }),
