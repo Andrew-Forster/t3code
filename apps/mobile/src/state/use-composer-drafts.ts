@@ -279,7 +279,7 @@ export function insertComposerDraftContext(
     if (!nextDraft) return current;
     inserted = true;
     removed = draft.attachments.filter((attachment) => !nextDraft.attachments.includes(attachment));
-    return { ...current, [draftKey]: nextDraft };
+    return withComposerDraft(current, draftKey, nextDraft);
   });
   scheduleUnusedComposerAttachmentCleanup(inserted ? removed : (content.attachments ?? []));
   return inserted;
@@ -1366,10 +1366,7 @@ export function appendComposerDraftAttachments(
         (attachment) => !draft.attachments.includes(attachment),
       );
     }
-    return {
-      ...current,
-      [draftKey]: draft,
-    };
+    return withComposerDraft(current, draftKey, draft);
   });
   scheduleUnusedComposerAttachmentCleanup([...rejected, ...removed]);
   return rejected.length;

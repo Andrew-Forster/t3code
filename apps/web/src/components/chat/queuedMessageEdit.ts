@@ -183,14 +183,22 @@ export function recoverQueuedMessageEdit(input: {
   readonly threadTarget: ComposerThreadTarget;
   readonly originalText: string;
   readonly originalAttachmentIds?: ReadonlyArray<string>;
+  readonly expectedEdit?: Pick<QueuedRunEditDraft, "runId" | "ownership">;
 }): "kept" | "retained" | "clean" {
-  releaseQueuedMessageEditDraft(input.editTarget);
   const store = useComposerDraftStore.getState();
+  const currentEdit = store.getComposerDraft(input.editTarget)?.queuedEdit;
+  if (
+    input.expectedEdit &&
+    (currentEdit?.runId !== input.expectedEdit.runId ||
+      currentEdit?.ownership !== input.expectedEdit.ownership)
+  )
+    return "clean";
+  releaseQueuedMessageEditDraft(input.editTarget);
   const draft = store.getComposerDraft(input.editTarget);
   const dirty =
     draft !== null &&
     (draft.prompt !== input.originalText ||
-      [...draft.images, ...draft.files].length !== (input.originalAttachmentIds?.length ?? 0) ||
+      (draft.queuedEdit?.removedAttachmentIds?.length ?? 0) > 0 ||
       [...draft.images, ...draft.files].some(
         (attachment) => !input.originalAttachmentIds?.includes(attachment.id),
       ) ||

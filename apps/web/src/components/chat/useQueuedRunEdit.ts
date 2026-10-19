@@ -243,47 +243,56 @@ export function useQueuedRunEdit(input: {
       });
       if (acquired._tag !== "Success") return;
       const target = queuedEditDraftTarget(routeThreadRef, request.runId);
+      const preparation = prepareQueuedMessageEditDraft({
+        editTarget: target,
+        edit: {
+          ...acquired.value,
+          runId: request.runId,
+          messageId: request.messageId,
+          context: serverProjection?.messages.find((message) => message.id === request.messageId)
+            ?.context,
+        },
+        environmentId,
+        text: request.text,
+        attachments: request.attachments,
+        readImage: async (attachment) => {
+          const connection = readPreparedConnection(environmentId);
+          if (!connection) throw new Error("Reconnect before editing attachments.");
+          const result = await executeAtomQuery(
+            appAtomRegistry,
+            assetEnvironment.createUrl({
+              environmentId,
+              input: { resource: { _tag: "attachment", attachmentId: attachment.id } },
+            }),
+            { refresh: true, reportFailure: false },
+          );
+          if (result._tag === "Failure") throw squashAtomCommandFailure(result);
+          const url = resolveAssetUrl(connection.httpBaseUrl, result.value.relativeUrl);
+          if (url === null) throw new Error("Attachment URL unavailable.");
+          const response = await fetch(url, { signal: AbortSignal.timeout(30_000) });
+          if (!response.ok) throw new Error(`Could not restore attachment: ${attachment.name}`);
+          const file = new File([await response.blob()], attachment.name, {
+            type: attachment.mimeType,
+          });
+          return { file, dataUrl: await readFileAsDataUrl(file) };
+        },
+      });
+      const preparedEdit = useComposerDraftStore.getState().getComposerDraft(target)?.queuedEdit;
       try {
-        await prepareQueuedMessageEditDraft({
-          editTarget: target,
-          edit: {
-            ...acquired.value,
-            runId: request.runId,
-            messageId: request.messageId,
-            context: serverProjection?.messages.find((message) => message.id === request.messageId)
-              ?.context,
-          },
-          environmentId,
-          text: request.text,
-          attachments: request.attachments,
-          readImage: async (attachment) => {
-            const connection = readPreparedConnection(environmentId);
-            if (!connection) throw new Error("Reconnect before editing attachments.");
-            const result = await executeAtomQuery(
-              appAtomRegistry,
-              assetEnvironment.createUrl({
-                environmentId,
-                input: { resource: { _tag: "attachment", attachmentId: attachment.id } },
-              }),
-              { refresh: true, reportFailure: false },
-            );
-            if (result._tag === "Failure") throw squashAtomCommandFailure(result);
-            const url = resolveAssetUrl(connection.httpBaseUrl, result.value.relativeUrl);
-            if (url === null) throw new Error("Attachment URL unavailable.");
-            const response = await fetch(url, { signal: AbortSignal.timeout(30_000) });
-            if (!response.ok) throw new Error(`Could not restore attachment: ${attachment.name}`);
-            const file = new File([await response.blob()], attachment.name, {
-              type: attachment.mimeType,
-            });
-            return { file, dataUrl: await readFileAsDataUrl(file) };
-          },
-        });
+        await preparation;
       } catch (error) {
         const released = await releaseFailedPreparation({
           environmentId,
           input: { threadId: activeThreadId, runId: request.runId, editId: acquired.value.editId },
         });
-        if (released._tag === "Success") clearEditDraft(request.runId);
+        if (released._tag === "Success" && preparedEdit?.ownership)
+          recoverQueuedMessageEdit({
+            editTarget: target,
+            threadTarget: threadDraftTarget,
+            originalText: preparedEdit.originalText,
+            originalAttachmentIds: preparedEdit.originalAttachmentIds,
+            expectedEdit: preparedEdit,
+          });
         toastManager.add({
           type: "error",
           title: "Could not open queued edit",

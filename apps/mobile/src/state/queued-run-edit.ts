@@ -222,14 +222,23 @@ export async function prepareQueuedRunEditDraft(
   });
 }
 
-export function recoverQueuedRunEdit(threadKey: string): boolean {
-  const edit = getQueuedRunEdit(threadKey);
+export function recoverQueuedRunEdit(
+  threadKey: string,
+  expectedEdit?: Pick<QueuedRunEditDraft, "runId" | "ownership">,
+): boolean {
+  const currentEdit = activeEditDraft(appAtomRegistry.get(composerDraftsAtom), threadKey);
+  if (
+    expectedEdit &&
+    (currentEdit?.runId !== expectedEdit.runId || currentEdit?.ownership !== expectedEdit.ownership)
+  )
+    return false;
+  const edit = editFromDraft(currentEdit);
   if (edit === null) return false;
   const draft = getComposerDraftSnapshot(queuedEditDraftKey(threadKey, edit.runId));
   const ids = edit.originalAttachmentIds ?? [];
   const dirty =
     draft.text !== edit.originalText ||
-    draft.attachments.length !== ids.length ||
+    (draft.queuedEdit?.removedAttachmentIds?.length ?? 0) > 0 ||
     draft.attachments.some((attachment) => !ids.includes(attachment.id));
   if (dirty) forgetQueuedRunEdit(threadKey);
   else endQueuedRunEdit(threadKey);

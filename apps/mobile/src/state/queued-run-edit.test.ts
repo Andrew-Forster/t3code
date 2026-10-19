@@ -99,7 +99,7 @@ describe("resolveQueuedEditPayload", () => {
     }
   });
 
-  it("keeps a failed attachment preparation owned across hydration until Cancel", async () => {
+  it("keeps failed preparation owned across hydration and drops untouched content after release", async () => {
     vi.useFakeTimers();
     try {
       const threadKey = "env:failed-open";
@@ -124,8 +124,41 @@ describe("resolveQueuedEditPayload", () => {
         getComposerDraftSnapshot(queuedEditDraftKey(threadKey, editing.runId)).queuedEdit
           ?.originalAttachmentIds,
       ).toEqual(["original-image"]);
-      endQueuedRunEdit(threadKey);
+      expect(recoverQueuedRunEdit(threadKey)).toBe(false);
       expect(getQueuedRunEdit(threadKey)).toBeNull();
+      expect(appAtomRegistry.get(composerDraftsAtom)).toEqual({});
+    } finally {
+      appAtomRegistry.set(composerDraftsAtom, {});
+      vi.clearAllTimers();
+      vi.useRealTimers();
+    }
+  });
+
+  it("keeps a replacement fallback edit when an old attachment import rejects", async () => {
+    vi.useFakeTimers();
+    try {
+      const threadKey = "env:replaced-import";
+      appAtomRegistry.set(composerDraftsAtom, {});
+      const editing = { ...edit([image("original-image")]), editId: null };
+      const read = Promise.withResolvers<never>();
+      const preparation = prepareQueuedRunEditDraft(threadKey, editing, () => read.promise);
+      const preparedEdit = getComposerDraftSnapshot(
+        queuedEditDraftKey(threadKey, editing.runId),
+      ).queuedEdit!;
+      endQueuedRunEdit(threadKey);
+      const replacement = { ...editing, originalAttachmentIds: [] };
+      beginQueuedRunEdit(threadKey, replacement, []);
+      const replacementKey = queuedEditDraftKey(threadKey, replacement.runId);
+      setComposerDraftText(replacementKey, "Keep replacement edit");
+      const draft = getComposerDraftSnapshot(replacementKey);
+      read.reject(new Error("offline"));
+      await expect(preparation).rejects.toThrow("offline");
+      recoverQueuedRunEdit(threadKey, preparedEdit);
+      expect(getQueuedRunEdit(threadKey)?.runId).toBe(replacement.runId);
+      expect(getComposerDraftSnapshot(replacementKey)).toEqual(draft);
+      expect(getComposerDraftSnapshot(replacementKey).queuedEdit?.ownership).toBe(
+        draft.queuedEdit?.ownership,
+      );
     } finally {
       appAtomRegistry.set(composerDraftsAtom, {});
       vi.clearAllTimers();

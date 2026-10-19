@@ -36,9 +36,10 @@ import { useAssetUrl } from "../../state/assets";
 import { assetImageSource } from "../../lib/assetImageSource";
 import {
   prepareQueuedRunEditDraft,
-  endQueuedRunEdit,
+  queuedEditDraftKey,
   useQueuedRunEdit,
 } from "../../state/queued-run-edit";
+import { getComposerDraftSnapshot } from "../../state/use-composer-drafts";
 import { importAttachment } from "../../lib/composerContextClipboard";
 import { recoverQueuedRunEdit } from "../../state/queued-run-edit";
 import { environmentThreadDetails, threadEnvironment } from "../../state/threads";
@@ -186,72 +187,77 @@ export function ThreadQueueSheet({ route }: StaticScreenProps<QueueTarget>) {
           input: { threadId: target.threadId, runId, previousEditId },
         });
         if (acquired._tag !== "Success") return;
-        try {
-          await prepareQueuedRunEditDraft(
-            threadKey,
-            {
-              ...acquired.value,
-              runId,
-              messageId: entry.messageId,
-              originalText: entry.text,
-              originalAttachmentIds: entry.attachments.map((attachment) => attachment.id),
-              ...(entry.context ? { context: entry.context } : {}),
-            },
-            async () => {
-              if (
-                entry.attachments.some(
-                  (attachment) => attachment.type !== "image" && attachment.type !== "file",
-                )
+        const preparation = prepareQueuedRunEditDraft(
+          threadKey,
+          {
+            ...acquired.value,
+            runId,
+            messageId: entry.messageId,
+            originalText: entry.text,
+            originalAttachmentIds: entry.attachments.map((attachment) => attachment.id),
+            ...(entry.context ? { context: entry.context } : {}),
+          },
+          async () => {
+            if (
+              entry.attachments.some(
+                (attachment) => attachment.type !== "image" && attachment.type !== "file",
               )
-                throw new Error("This attachment cannot be edited.");
-              return await Promise.all(
-                entry.attachments
-                  .filter(
-                    (attachment): attachment is ChatImageAttachment | ChatFileAttachment =>
-                      attachment.type === "image" || attachment.type === "file",
-                  )
-                  .map(async (attachment) => {
-                    const local = await importAttachment(
-                      {
-                        version: 1,
-                        kind: attachment.type,
-                        contextId: ComposerContextId.make(attachment.id),
-                        label: attachment.name,
-                        attachmentId: attachment.id,
-                        name: attachment.name,
-                        mimeType: attachment.mimeType,
-                        sizeBytes: attachment.sizeBytes,
-                      },
-                      target.environmentId,
-                      new AbortController().signal,
-                    );
-                    const restored = {
-                      ...local,
-                      id: attachment.id,
-                      uploadedAttachmentId: attachment.id,
-                      uploadEnvironmentId: target.environmentId,
+            )
+              throw new Error("This attachment cannot be edited.");
+            return await Promise.all(
+              entry.attachments
+                .filter(
+                  (attachment): attachment is ChatImageAttachment | ChatFileAttachment =>
+                    attachment.type === "image" || attachment.type === "file",
+                )
+                .map(async (attachment) => {
+                  const local = await importAttachment(
+                    {
+                      version: 1,
+                      kind: attachment.type,
+                      contextId: ComposerContextId.make(attachment.id),
+                      label: attachment.name,
+                      attachmentId: attachment.id,
+                      name: attachment.name,
+                      mimeType: attachment.mimeType,
+                      sizeBytes: attachment.sizeBytes,
+                    },
+                    target.environmentId,
+                    new AbortController().signal,
+                  );
+                  const restored = {
+                    ...local,
+                    id: attachment.id,
+                    uploadedAttachmentId: attachment.id,
+                    uploadEnvironmentId: target.environmentId,
+                  };
+                  if (restored.type === "image" && attachment.type === "image")
+                    return {
+                      ...restored,
+                      ...(attachment.source ? { source: attachment.source } : {}),
                     };
-                    if (restored.type === "image" && attachment.type === "image")
-                      return {
-                        ...restored,
-                        ...(attachment.source ? { source: attachment.source } : {}),
-                      };
-                    if (restored.type === "file" && attachment.type === "file")
-                      return {
-                        ...restored,
-                        ...(attachment.source ? { source: attachment.source } : {}),
-                      };
-                    return restored;
-                  }),
-              );
-            },
-          );
+                  if (restored.type === "file" && attachment.type === "file")
+                    return {
+                      ...restored,
+                      ...(attachment.source ? { source: attachment.source } : {}),
+                    };
+                  return restored;
+                }),
+            );
+          },
+        );
+        const preparedEdit = getComposerDraftSnapshot(
+          queuedEditDraftKey(threadKey, runId),
+        ).queuedEdit;
+        try {
+          await preparation;
         } catch (error) {
           const released = await releaseFailedPreparation({
             environmentId: target.environmentId,
             input: { threadId: target.threadId, runId, editId: acquired.value.editId },
           });
-          if (released._tag === "Success") endQueuedRunEdit(threadKey);
+          if (released._tag === "Success" && preparedEdit?.ownership)
+            recoverQueuedRunEdit(threadKey, preparedEdit);
           Dialog.alert(
             "Could not open queued edit",
             error instanceof Error ? error.message : "Could not restore attachments.",

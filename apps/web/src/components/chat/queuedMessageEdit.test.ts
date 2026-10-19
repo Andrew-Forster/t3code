@@ -238,6 +238,78 @@ describe("queued message file edits", () => {
     expect(store.getComposerDraft(editTarget)).toBeNull();
   });
 
+  it("recovers text typed while failed image preparation was pending after release", async () => {
+    const store = useComposerDraftStore.getState();
+    let rejectFetch!: (error: Error) => void;
+    const fetch = new Promise<never>((_resolve, reject) => {
+      rejectFetch = reject;
+    });
+    const preparation = prepareQueuedMessageEditDraft({
+      editTarget,
+      edit,
+      environmentId,
+      text: "Original",
+      attachments: [image],
+      readImage: () => fetch,
+    });
+    const preparedEdit = store.getComposerDraft(editTarget)!.queuedEdit!;
+    store.setPrompt(editTarget, "Keep what I typed during loading");
+    rejectFetch(new Error("offline"));
+    await expect(preparation).rejects.toThrow("offline");
+    expect(
+      recoverQueuedMessageEdit({
+        editTarget,
+        threadTarget,
+        originalText: preparedEdit.originalText,
+        originalAttachmentIds: preparedEdit.originalAttachmentIds,
+        expectedEdit: preparedEdit,
+      }),
+    ).toBe("kept");
+    expect(store.getComposerDraft(threadTarget)?.prompt).toBe("Keep what I typed during loading");
+    expect(store.getComposerDraft(editTarget)).toBeNull();
+  });
+
+  it("leaves a replacement fallback edit intact after an old preparation fails", async () => {
+    const store = useComposerDraftStore.getState();
+    let rejectFetch!: (error: Error) => void;
+    const fetch = new Promise<never>((_resolve, reject) => {
+      rejectFetch = reject;
+    });
+    const preparation = prepareQueuedMessageEditDraft({
+      editTarget,
+      edit: { ...edit, editId: null },
+      environmentId,
+      text: "Original",
+      attachments: [image],
+      readImage: () => fetch,
+    });
+    const preparedEdit = store.getComposerDraft(editTarget)!.queuedEdit!;
+    store.clearComposerContent(editTarget);
+    await prepareQueuedMessageEditDraft({
+      editTarget,
+      edit: { ...edit, editId: null },
+      environmentId,
+      text: "Original",
+      attachments: [],
+      readImage: async () => {
+        throw new Error("unused");
+      },
+    });
+    store.setPrompt(editTarget, "Replacement edit");
+    const replacement = store.getComposerDraft(editTarget);
+    rejectFetch(new Error("offline"));
+    await expect(preparation).rejects.toThrow("offline");
+    recoverQueuedMessageEdit({
+      editTarget,
+      threadTarget,
+      originalText: preparedEdit.originalText,
+      originalAttachmentIds: preparedEdit.originalAttachmentIds,
+      expectedEdit: preparedEdit,
+    });
+    expect(store.getComposerDraft(editTarget)).toBe(replacement);
+    expect(store.getComposerDraft(threadTarget)).toBeNull();
+  });
+
   it.each(["text", "attachments"])(
     "retains an older dirty edit separately when server %s changes",
     async (change) => {
@@ -472,7 +544,8 @@ describe("queued message file edits", () => {
         originalText: "Original",
         originalAttachmentIds: [saved.id],
       }),
-    ).toBe("retained");
+    ).toBe("clean");
+    expect(store.getComposerDraft(editTarget)).toBeNull();
     expect(store.getComposerDraft(threadTarget)?.prompt).toBe("Occupied draft");
     // Missing content cannot be reused as an intentional selection when reopening.
     await prepare();
