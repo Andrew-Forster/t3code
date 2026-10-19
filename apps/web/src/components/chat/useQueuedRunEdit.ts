@@ -279,10 +279,11 @@ export function useQueuedRunEdit(input: {
           },
         });
       } catch (error) {
-        await releaseFailedPreparation({
+        const released = await releaseFailedPreparation({
           environmentId,
           input: { threadId: activeThreadId, runId: request.runId, editId: acquired.value.editId },
         });
+        if (released._tag === "Success") clearEditDraft(request.runId);
         toastManager.add({
           type: "error",
           title: "Could not open queued edit",

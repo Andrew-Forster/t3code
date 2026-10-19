@@ -35,8 +35,8 @@ import { NativeStackScreenOptions, nativeHeaderScrollEdgeEffects } from "../../n
 import { useAssetUrl } from "../../state/assets";
 import { assetImageSource } from "../../lib/assetImageSource";
 import {
-  beginQueuedRunEdit,
-  canReuseQueuedRunEditDraft,
+  prepareQueuedRunEditDraft,
+  endQueuedRunEdit,
   useQueuedRunEdit,
 } from "../../state/queued-run-edit";
 import { importAttachment } from "../../lib/composerContextClipboard";
@@ -186,17 +186,25 @@ export function ThreadQueueSheet({ route }: StaticScreenProps<QueueTarget>) {
           input: { threadId: target.threadId, runId, previousEditId },
         });
         if (acquired._tag !== "Success") return;
-        let attachments;
         try {
-          if (
-            entry.attachments.some(
-              (attachment) => attachment.type !== "image" && attachment.type !== "file",
-            )
-          )
-            throw new Error("This attachment cannot be edited.");
-          attachments = canReuseQueuedRunEditDraft(threadKey, runId, entry.text, entry.attachments)
-            ? []
-            : await Promise.all(
+          await prepareQueuedRunEditDraft(
+            threadKey,
+            {
+              ...acquired.value,
+              runId,
+              messageId: entry.messageId,
+              originalText: entry.text,
+              originalAttachmentIds: entry.attachments.map((attachment) => attachment.id),
+              ...(entry.context ? { context: entry.context } : {}),
+            },
+            async () => {
+              if (
+                entry.attachments.some(
+                  (attachment) => attachment.type !== "image" && attachment.type !== "file",
+                )
+              )
+                throw new Error("This attachment cannot be edited.");
+              return await Promise.all(
                 entry.attachments
                   .filter(
                     (attachment): attachment is ChatImageAttachment | ChatFileAttachment =>
@@ -236,11 +244,14 @@ export function ThreadQueueSheet({ route }: StaticScreenProps<QueueTarget>) {
                     return restored;
                   }),
               );
+            },
+          );
         } catch (error) {
-          await releaseFailedPreparation({
+          const released = await releaseFailedPreparation({
             environmentId: target.environmentId,
             input: { threadId: target.threadId, runId, editId: acquired.value.editId },
           });
+          if (released._tag === "Success") endQueuedRunEdit(threadKey);
           Dialog.alert(
             "Could not open queued edit",
             error instanceof Error ? error.message : "Could not restore attachments.",
@@ -248,18 +259,6 @@ export function ThreadQueueSheet({ route }: StaticScreenProps<QueueTarget>) {
           return;
         }
         void Haptics.selectionAsync();
-        beginQueuedRunEdit(
-          threadKey,
-          {
-            ...acquired.value,
-            runId,
-            messageId: entry.messageId,
-            originalText: entry.text,
-            originalAttachmentIds: entry.attachments.map((attachment) => attachment.id),
-            ...(entry.context ? { context: entry.context } : {}),
-          },
-          attachments,
-        );
         navigation.goBack();
       } finally {
         busyRef.current = false;

@@ -1,3 +1,4 @@
+import { queuedEditDraftHasMissingAttachments } from "@t3tools/client-runtime/state/queued-run-edit-draft";
 import * as Dialog from "../components/ui/Dialog";
 import { AuthOrchestrationOperateScope } from "@t3tools/contracts";
 import { readEnvironmentScope } from "./session";
@@ -434,6 +435,16 @@ export function useThreadComposerState() {
     const edit = getQueuedRunEdit(threadKey);
     if (edit === null) return;
     const draft = getComposerDraftSnapshot(queuedEditDraftKey(threadKey, edit.runId));
+    if (
+      draft.queuedEdit &&
+      queuedEditDraftHasMissingAttachments(draft.queuedEdit, draft.attachments)
+    ) {
+      Dialog.alert(
+        "Could not save the queued message",
+        "An attachment could not be restored. Cancel and reopen the edit to restore it before saving.",
+      );
+      return;
+    }
     const text = draft.text.trim();
     if (text.length === 0) {
       // The server rejects an empty queued message, attachments or not.

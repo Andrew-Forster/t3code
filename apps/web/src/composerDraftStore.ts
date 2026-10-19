@@ -762,7 +762,7 @@ const EMPTY_THREAD_DRAFT = Object.freeze<ComposerThreadDraftState>({
   interactionMode: null,
 });
 
-function createEmptyThreadDraft(): ComposerThreadDraftState {
+export function createEmptyThreadDraft(): ComposerThreadDraftState {
   return {
     prompt: "",
     images: [],
@@ -872,7 +872,7 @@ function shouldRemoveDraft(draft: ComposerThreadDraftState): boolean {
     draft.activeProvider === null &&
     draft.runtimeMode === null &&
     draft.interactionMode === null &&
-    draft.queuedEdit === undefined
+    draft.queuedEdit?.ownership === undefined
   );
 }
 
@@ -1897,7 +1897,8 @@ function normalizePersistedDraftsByThreadId(
       !hasModelData &&
       !runtimeMode &&
       !interactionMode &&
-      !draftCandidate.queuedEdit
+      (!isQueuedRunEditDraft(draftCandidate.queuedEdit) ||
+        draftCandidate.queuedEdit.ownership === undefined)
     ) {
       continue;
     }
@@ -2033,7 +2034,7 @@ export function partializeComposerDraftStoreState(
       !hasModelData &&
       draft.runtimeMode === null &&
       draft.interactionMode === null &&
-      !draft.queuedEdit
+      draft.queuedEdit?.ownership === undefined
     ) {
       continue;
     }

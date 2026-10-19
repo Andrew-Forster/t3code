@@ -18,6 +18,7 @@ import type {
 } from "@t3tools/contracts";
 import {
   composerDraftHasUserContent,
+  createEmptyThreadDraft,
   resolveComposerDraftKey,
   useComposerDraftStore,
   type ComposerFileAttachment,
@@ -85,7 +86,8 @@ export async function prepareQueuedMessageEditDraft(input: {
     const retained = queuedEdit
       ? { ...content, queuedEdit: { ...queuedEdit, ownership: undefined } }
       : content;
-    const next = { ...store.draftsByThreadKey, [`${key}:saved:${randomUUID()}`]: retained };
+    const next = { ...store.draftsByThreadKey };
+    if (composerDraftHasUserContent(retained)) next[`${key}:saved:${randomUUID()}`] = retained;
     delete next[key];
     useComposerDraftStore.setState({ draftsByThreadKey: next });
   }
@@ -105,6 +107,30 @@ export async function prepareQueuedMessageEditDraft(input: {
     }));
     return;
   }
+  useComposerDraftStore.setState((state) => {
+    const draft = state.draftsByThreadKey[key] ?? createEmptyThreadDraft();
+    return {
+      draftsByThreadKey: {
+        ...state.draftsByThreadKey,
+        [key]: {
+          ...draft,
+          prompt: text,
+          queuedEdit: {
+            runId: input.edit.runId,
+            messageId: input.edit.messageId,
+            sourceText: input.text,
+            originalText: text,
+            originalAttachmentIds: input.attachments.map((attachment) => attachment.id),
+            ...(context ? { context } : {}),
+            ownership: { editId: input.edit.editId, sequence: input.edit.sequence },
+          },
+        },
+      },
+    };
+  });
+  const ownership = store.getComposerDraft(input.editTarget)?.queuedEdit?.ownership;
+  const ownsDraft = () =>
+    store.getComposerDraft(input.editTarget)?.queuedEdit?.ownership === ownership;
   if (
     input.attachments.some(
       (attachment) => attachment.type !== "image" && attachment.type !== "file",
@@ -119,9 +145,10 @@ export async function prepareQueuedMessageEditDraft(input: {
         return { ...image, file, previewUrl: dataUrl, dataUrl };
       }),
   );
-  store.setPrompt(input.editTarget, text);
+  if (!ownsDraft()) return;
   store.addImages(input.editTarget, images, { allowDuplicates: true });
   await store.syncPersistedAttachments(input.editTarget, images);
+  if (!ownsDraft()) return;
   store.addFiles(
     input.editTarget,
     input.attachments
@@ -134,26 +161,6 @@ export async function prepareQueuedMessageEditDraft(input: {
       })),
     { allowDuplicates: true },
   );
-  useComposerDraftStore.setState((state) => {
-    const draft = state.draftsByThreadKey[key]!;
-    return {
-      draftsByThreadKey: {
-        ...state.draftsByThreadKey,
-        [key]: {
-          ...draft,
-          queuedEdit: {
-            runId: input.edit.runId,
-            messageId: input.edit.messageId,
-            sourceText: input.text,
-            originalText: draft.prompt,
-            originalAttachmentIds: input.attachments.map((attachment) => attachment.id),
-            ...(context ? { context } : {}),
-            ownership: { editId: input.edit.editId, sequence: input.edit.sequence },
-          },
-        },
-      },
-    };
-  });
 }
 
 export function releaseQueuedMessageEditDraft(editTarget: ComposerThreadTarget) {
@@ -168,6 +175,7 @@ export function releaseQueuedMessageEditDraft(editTarget: ComposerThreadTarget) 
       [key]: { ...draft, queuedEdit: { ...draft.queuedEdit, ownership: undefined } },
     },
   });
+  store.setPrompt(editTarget, draft.prompt);
 }
 
 export function recoverQueuedMessageEdit(input: {
@@ -240,7 +248,9 @@ export async function prepareQueuedEditPayload(input: {
       name: image.name,
       mimeType: image.mimeType,
       sizeBytes: image.sizeBytes,
-      dataUrl: await input.readImage(image.file),
+      ...(!edit.originalAttachmentIds.includes(image.id)
+        ? { dataUrl: await input.readImage(image.file) }
+        : {}),
       ...(image.source ? { source: image.source } : {}),
     })),
   );

@@ -1,5 +1,6 @@
 import {
   queuedEditDraftMatchesSource,
+  queuedEditDraftHasMissingAttachments,
   type QueuedRunEditDraft,
 } from "@t3tools/client-runtime/state/queued-run-edit-draft";
 import { uuidv4 } from "../lib/uuid";
@@ -26,6 +27,7 @@ import {
   setComposerDraftText,
   getComposerDraftSnapshot,
   composerDraftsAtom,
+  isComposerDraftEmpty,
   appendComposerDraftAttachments,
 } from "./use-composer-drafts";
 
@@ -39,7 +41,7 @@ export interface QueuedRunEdit {
   readonly context?: OrchestrationMessageContext;
 }
 
-export { isQueuedEditDraftKey, queuedEditDraftKey } from "./queued-edit-draft-key";
+export { queuedEditDraftKey } from "./queued-edit-draft-key";
 
 const queuedEditRecoverySelectionAtom = Atom.make<Readonly<Record<string, string>>>({}).pipe(
   Atom.keepAlive,
@@ -115,15 +117,16 @@ export function useQueuedRunEdit(threadKey: string | null): QueuedRunEdit | null
 }
 
 export function forgetQueuedRunEdit(threadKey: string): void {
-  updateComposerDrafts((current) =>
-    Object.fromEntries(
-      Object.entries(current).map(([key, draft]) =>
-        key.startsWith(`${threadKey}~queued-edit~`) && draft.queuedEdit?.ownership !== undefined
-          ? [key, { ...draft, queuedEdit: { ...draft.queuedEdit, ownership: undefined } }]
-          : [key, draft],
-      ),
-    ),
-  );
+  updateComposerDrafts((current) => {
+    const next = { ...current };
+    for (const [key, draft] of Object.entries(current)) {
+      if (!key.startsWith(threadKey + "~queued-edit~") || !draft.queuedEdit?.ownership) continue;
+      const retained = { ...draft, queuedEdit: { ...draft.queuedEdit, ownership: undefined } };
+      if (isComposerDraftEmpty(retained)) delete next[key];
+      else next[key] = retained;
+    }
+    return next;
+  });
 }
 
 export function canReuseQueuedRunEditDraft(
@@ -132,10 +135,11 @@ export function canReuseQueuedRunEditDraft(
   text: string,
   attachments: ReadonlyArray<{ readonly id: string }>,
 ) {
-  return queuedEditDraftMatchesSource(
-    getComposerDraftSnapshot(queuedEditDraftKey(threadKey, runId)).queuedEdit,
-    text,
-    attachments,
+  const draft = getComposerDraftSnapshot(queuedEditDraftKey(threadKey, runId));
+  return (
+    queuedEditDraftMatchesSource(draft.queuedEdit, text, attachments) &&
+    draft.queuedEdit !== undefined &&
+    !queuedEditDraftHasMissingAttachments(draft.queuedEdit, draft.attachments)
   );
 }
 
@@ -162,7 +166,8 @@ export function beginQueuedRunEdit(
       const retained = existing.queuedEdit
         ? { ...existing, queuedEdit: { ...existing.queuedEdit, ownership: undefined } }
         : existing;
-      const next = { ...current, [`${draftKey}~saved~${uuidv4()}`]: retained };
+      const next = { ...current };
+      if (!isComposerDraftEmpty(retained)) next[`${draftKey}~saved~${uuidv4()}`] = retained;
       delete next[draftKey];
       return next;
     });
@@ -184,11 +189,36 @@ export function beginQueuedRunEdit(
           sourceText: edit.originalText,
           originalText: reuse ? (existing?.queuedEdit?.originalText ?? draft.text) : draft.text,
           originalAttachmentIds: edit.originalAttachmentIds,
+          ...(reuse && existing?.queuedEdit?.removedAttachmentIds
+            ? { removedAttachmentIds: existing.queuedEdit.removedAttachmentIds }
+            : {}),
           ...(edit.context ? { context: edit.context } : {}),
           ownership: { editId: edit.editId, sequence: edit.sequence },
         },
       },
     };
+  });
+}
+
+export async function prepareQueuedRunEditDraft(
+  threadKey: string,
+  edit: QueuedRunEdit,
+  readAttachments: () => Promise<ReadonlyArray<DraftComposerAttachment>>,
+): Promise<void> {
+  const reuse = canReuseQueuedRunEditDraft(
+    threadKey,
+    edit.runId,
+    edit.originalText,
+    edit.originalAttachmentIds.map((id) => ({ id })),
+  );
+  beginQueuedRunEdit(threadKey, edit, []);
+  if (reuse) return;
+  const draftKey = queuedEditDraftKey(threadKey, edit.runId);
+  const ownership = getComposerDraftSnapshot(draftKey).queuedEdit?.ownership;
+  const attachments = await readAttachments();
+  if (getComposerDraftSnapshot(draftKey).queuedEdit?.ownership !== ownership) return;
+  appendComposerDraftAttachments(draftKey, attachments, {
+    allowOverflow: true,
   });
 }
 

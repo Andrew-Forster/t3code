@@ -180,7 +180,62 @@ describe("queued message file edits", () => {
     expect(store.getComposerDraft(editTarget)?.prompt).toBe("");
     expect(store.getComposerDraft(threadTarget)?.prompt).toBe("Separate draft");
     releaseQueuedMessageEditDraft(editTarget);
-    expect(store.getComposerDraft(editTarget)?.queuedEdit?.ownership).toBeUndefined();
+    expect(store.getComposerDraft(editTarget)).toBeNull();
+    expect(
+      partializeComposerDraftStoreState(useComposerDraftStore.getState()).draftsByThreadKey[
+        editTarget
+      ],
+    ).toBeUndefined();
+  });
+
+  it("retains the acquired hold through attachment failure and reload until Cancel succeeds", async () => {
+    const store = useComposerDraftStore.getState();
+    await expect(
+      prepareQueuedMessageEditDraft({
+        editTarget,
+        edit,
+        environmentId,
+        text: "Original",
+        attachments: [
+          {
+            type: "image",
+            id: image.id,
+            name: image.name,
+            mimeType: image.mimeType,
+            sizeBytes: image.sizeBytes,
+          },
+        ],
+        readImage: async () => {
+          throw new Error("offline");
+        },
+      }),
+    ).rejects.toThrow("offline");
+    // Cleanup cannot reach the server while offline, so ownership must survive reload.
+    const persisted = JSON.parse(
+      JSON.stringify(partializeComposerDraftStoreState(useComposerDraftStore.getState())),
+    );
+    useComposerDraftStore.setState({ draftsByThreadKey: {} });
+    useComposerDraftStore.setState(
+      useComposerDraftStore.persist.getOptions().merge!(
+        persisted,
+        useComposerDraftStore.getState(),
+      ),
+    );
+    const draft = store.getComposerDraft(editTarget)!;
+    expect(draft.queuedEdit?.ownership).toEqual({ editId: edit.editId, sequence: edit.sequence });
+    await expect(
+      prepareQueuedEditPayload({
+        edit: draft.queuedEdit!,
+        content: draft,
+        readImage: async () => {
+          throw new Error("unused");
+        },
+        uploadFiles: async () => [],
+      }),
+    ).rejects.toThrow("attachment could not be restored");
+    // The normal Cancel path clears the draft only after the token's release succeeds.
+    store.clearComposerContent(editTarget);
+    expect(store.getComposerDraft(editTarget)).toBeNull();
   });
 
   it.each(["text", "attachments"])(
@@ -218,6 +273,11 @@ describe("queued message file edits", () => {
       )?.[1];
       expect(retained?.prompt).toBe("My older edit");
       expect(retained?.queuedEdit?.ownership).toBeUndefined();
+      const retainedKey = Object.keys(useComposerDraftStore.getState().draftsByThreadKey).find(
+        (key) => key.startsWith(editTarget + ":saved:"),
+      )!;
+      store.setPrompt(DraftId.make(retainedKey), "");
+      expect(store.getComposerDraft(DraftId.make(retainedKey))).toBeNull();
     },
   );
 
@@ -287,6 +347,12 @@ describe("queued message file edits", () => {
       name: "screen.png",
       mimeType: "image/png",
       sizeBytes: 5,
+      source: {
+        kind: "snap-shot" as const,
+        capturedAt: "2026-10-19T00:00:00.000Z",
+        appName: "Browser",
+        windowTitle: "Test",
+      },
     };
     const savedFile = { ...uploadedFile, id: "server-file" };
     const attachments = [savedFile, savedImage];
@@ -309,18 +375,21 @@ describe("queued message file edits", () => {
       attachments,
       readImage: async () => ({ file: image.file, dataUrl: "data:image/png;base64,aW1hZ2U=" }),
     });
+    const readImage = vi.fn(async () => "data:image/png;base64,aW1hZ2U=");
     const save = () => {
       const draft = store.getComposerDraft(editTarget)!;
       return prepareQueuedEditPayload({
         edit: draft.queuedEdit!,
         content: draft,
-        readImage: async () => "data:image/png;base64,aW1hZ2U=",
+        readImage,
         uploadFiles: async (files) =>
           files.map((file) => ({ ...savedFile, id: file.uploadedAttachmentId! })),
       });
     };
     store.setPrompt(editTarget, store.getComposerDraft(editTarget)!.prompt + " edited");
     const kept = await save();
+    expect(readImage).not.toHaveBeenCalled();
+    expect(kept.attachments).toEqual(attachments);
     expect(kept.attachments.map((attachment) => attachment.id)).toEqual([
       savedFile.id,
       savedImage.id,

@@ -559,7 +559,7 @@ function isEmptyDraft(draft: ComposerDraft): boolean {
     draft.runtimeMode === undefined &&
     draft.interactionMode === undefined &&
     draft.workspaceSelection === undefined &&
-    draft.queuedEdit === undefined
+    draft.queuedEdit?.ownership === undefined
   );
 }
 
@@ -568,6 +568,25 @@ function withComposerDraft(
   draftKey: string,
   draft: ComposerDraft,
 ): Record<string, ComposerDraft> {
+  const removedOriginalIds =
+    current[draftKey]?.attachments
+      .filter(
+        (attachment) =>
+          draft.queuedEdit?.originalAttachmentIds.includes(attachment.id) &&
+          !draft.attachments.some((retained) => retained.id === attachment.id),
+      )
+      .map((attachment) => attachment.id) ?? [];
+  if (draft.queuedEdit && removedOriginalIds.length > 0) {
+    draft = {
+      ...draft,
+      queuedEdit: {
+        ...draft.queuedEdit,
+        removedAttachmentIds: [
+          ...new Set([...(draft.queuedEdit.removedAttachmentIds ?? []), ...removedOriginalIds]),
+        ],
+      },
+    };
+  }
   if (isEmptyDraft(draft) && draft.project === undefined) {
     const next = { ...current };
     delete next[draftKey];
@@ -626,7 +645,7 @@ export function decodePersistedComposerState(value: unknown): {
               draft.runtimeMode === undefined &&
               draft.interactionMode === undefined &&
               draft.workspaceSelection === undefined &&
-              draft.queuedEdit === undefined
+              draft.queuedEdit?.ownership === undefined
               ? { ...draft, modelSelection: undefined }
               : draft,
             now,

@@ -15,9 +15,11 @@ import {
 } from "@t3tools/contracts";
 
 import { composerDraftEnvironmentId } from "../lib/composerAttachmentUploadQueue";
-import { isQueuedEditDraftKey, queuedEditDraftKey } from "./queued-edit-draft-key";
+import { queuedEditDraftKey } from "./queued-edit-draft-key";
 import {
   beginQueuedRunEdit,
+  prepareQueuedRunEditDraft,
+  canReuseQueuedRunEditDraft,
   recoverQueuedRunEdit,
   getQueuedRunEdit,
   forgetQueuedRunEdit,
@@ -58,8 +60,6 @@ describe("queued edit draft key", () => {
   it("keeps the environment readable so attachment uploads still resolve it", () => {
     const key = queuedEditDraftKey("env-1:thread-9", "run-3");
 
-    expect(isQueuedEditDraftKey(key)).toBe(true);
-    expect(isQueuedEditDraftKey("env-1:thread-9")).toBe(false);
     expect(composerDraftEnvironmentId(key, [])).toBe("env-1");
   });
 });
@@ -85,9 +85,47 @@ describe("resolveQueuedEditPayload", () => {
       expect(getQueuedRunEdit(first)?.editId).toBe("edit-1");
       expect(getQueuedRunEdit(second)?.editId).toBe("edit-2");
       expect(getComposerDraftSnapshot(queuedEditDraftKey(first, "run-1")).text).toBe("");
+      recoverQueuedRunEdit(first);
+      expect(
+        appAtomRegistry.get(composerDraftsAtom)[queuedEditDraftKey(first, "run-1")],
+      ).toBeUndefined();
       endQueuedRunEdit(first);
       expect(getQueuedRunEdit(first)).toBeNull();
       expect(getQueuedRunEdit(second)?.editId).toBe("edit-2");
+    } finally {
+      appAtomRegistry.set(composerDraftsAtom, {});
+      vi.clearAllTimers();
+      vi.useRealTimers();
+    }
+  });
+
+  it("keeps a failed attachment preparation owned across hydration until Cancel", async () => {
+    vi.useFakeTimers();
+    try {
+      const threadKey = "env:failed-open";
+      appAtomRegistry.set(composerDraftsAtom, {});
+      const editing = edit([image("original-image")]);
+      await expect(
+        prepareQueuedRunEditDraft(threadKey, editing, async () => {
+          throw new Error("offline");
+        }),
+      ).rejects.toThrow("offline");
+      const restored = decodePersistedComposerState(
+        JSON.parse(
+          JSON.stringify({
+            schemaVersion: 1,
+            drafts: appAtomRegistry.get(composerDraftsAtom),
+          }),
+        ),
+      );
+      appAtomRegistry.set(composerDraftsAtom, restored.drafts);
+      expect(getQueuedRunEdit(threadKey)?.editId).toBe(editing.editId);
+      expect(
+        getComposerDraftSnapshot(queuedEditDraftKey(threadKey, editing.runId)).queuedEdit
+          ?.originalAttachmentIds,
+      ).toEqual(["original-image"]);
+      endQueuedRunEdit(threadKey);
+      expect(getQueuedRunEdit(threadKey)).toBeNull();
     } finally {
       appAtomRegistry.set(composerDraftsAtom, {});
       vi.clearAllTimers();
@@ -139,6 +177,11 @@ describe("resolveQueuedEditPayload", () => {
         )?.[1];
         expect(retained?.text).toBe("My older edit");
         expect(retained?.queuedEdit?.ownership).toBeUndefined();
+        const retainedKey = Object.keys(appAtomRegistry.get(composerDraftsAtom)).find((key) =>
+          key.includes("~saved~"),
+        )!;
+        setComposerDraftText(retainedKey, "");
+        expect(appAtomRegistry.get(composerDraftsAtom)[retainedKey]).toBeUndefined();
       } finally {
         appAtomRegistry.set(composerDraftsAtom, {});
         vi.clearAllTimers();
@@ -195,6 +238,15 @@ describe("resolveQueuedEditPayload", () => {
           ),
         );
         expect(restored.drafts[threadKey]).toEqual(main);
+        appAtomRegistry.set(composerDraftsAtom, restored.drafts);
+        expect(
+          canReuseQueuedRunEditDraft(
+            threadKey,
+            editing.runId,
+            editing.originalText,
+            editing.originalAttachmentIds.map((id) => ({ id })),
+          ),
+        ).toBe(true);
         expect(restored.drafts[draftKey]?.attachments.map((attachment) => attachment.id)).toEqual(
           change === "attachment removal" ? ["second"] : ["first", "second"],
         );
