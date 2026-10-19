@@ -1,15 +1,12 @@
 import {
   PROVIDER_SEND_TURN_MAX_ATTACHMENTS,
-  type ChatAttachment,
   type CommandId,
   type EnvironmentId,
-  type MessageId,
-  type OrchestrationMessageContext,
   type OrchestrationV2ThreadProjection,
   type PreviewAnnotationPayload,
-  type RunId,
   type ScopedThreadRef,
   type ThreadContextRecord,
+  type RunId,
   type ThreadId,
 } from "@t3tools/contracts";
 import { queuedRunEditOwnership } from "@t3tools/client-runtime/state/threads";
@@ -18,7 +15,6 @@ import { scopedThreadKey } from "@t3tools/client-runtime/environment";
 import { ATTACHMENT_ONLY_BOOTSTRAP_PROMPT } from "@t3tools/shared/composerContextReferences";
 import { useShallow } from "zustand/react/shallow";
 import { useEffect, useRef, useState, type RefObject } from "react";
-import { useAssetUrls } from "../../assets/assetUrls";
 import { resolveAssetUrl } from "@t3tools/client-runtime/state/assets";
 import { executeAtomQuery, squashAtomCommandFailure } from "@t3tools/client-runtime/state/runtime";
 import { assetEnvironment } from "../../state/assets";
@@ -37,7 +33,6 @@ import {
   releaseDraftAttachments,
   startAttachmentUpload,
 } from "../../lib/attachmentUploadQueue";
-import { buildMessageContext } from "../../lib/composerContextRecords";
 import { readFileAsDataUrl } from "../../lib/imageCompression";
 import type { TerminalContextDraft } from "../../lib/terminalContext";
 import type { ReviewCommentContext } from "../../reviewCommentContext";
@@ -49,22 +44,18 @@ import { stackedThreadToast, toastManager } from "../ui/toast";
 import type { ChatComposerHandle } from "./ChatComposer";
 import { fileAttachmentCapabilityBlockReason } from "./composerAttachmentFiles";
 import {
-  prepareQueuedEditAttachments,
+  prepareQueuedEditPayload,
   prepareQueuedMessageEditDraft,
   recoverQueuedMessageEdit,
 } from "./queuedMessageEdit";
 import type { EditQueuedRunRequest } from "./QueuedRunsControl";
 
-interface EditingQueuedRun {
+import type { QueuedRunEditDraft } from "@t3tools/client-runtime/state/queued-run-edit-draft";
+
+interface EditingQueuedRun extends QueuedRunEditDraft {
   readonly editId: CommandId | null;
   readonly sequence: number;
   readonly threadId: ThreadId;
-  readonly runId: RunId;
-  readonly messageId: MessageId;
-  readonly originalText: string;
-  readonly originalAttachmentIds: ReadonlyArray<string>;
-  readonly existingAttachments: ReadonlyArray<ChatAttachment>;
-  readonly context?: OrchestrationMessageContext | undefined;
 }
 
 /** What the composer holds when the user saves a queued-message edit. */
@@ -93,7 +84,6 @@ async function submitQueuedRunEdit(input: {
 }): Promise<string | null> {
   const { environmentId, draftTarget, editing, content } = input;
   const editText = content.prompt.trim();
-  const newAttachments = [...content.images, ...content.files];
   const uploadFiles = async (files: ReadonlyArray<ComposerFileAttachment>) => {
     const validateFiles = () => {
       const config = appAtomRegistry.get(environmentServerConfigsAtom).get(environmentId) ?? null;
@@ -115,32 +105,12 @@ async function submitQueuedRunEdit(input: {
     return uploaded;
   };
   try {
-    const uploads = await prepareQueuedEditAttachments({
-      existingAttachments: editing.existingAttachments,
-      images: content.images,
-      files: content.files,
+    const payload = await prepareQueuedEditPayload({
+      edit: editing,
+      content,
       readImage: readFileAsDataUrl,
       uploadFiles,
     });
-    // Kept records for removed attachments would point at nothing.
-    const keptRecords = (editing.context?.records ?? []).filter(
-      (record) =>
-        !("attachmentId" in record) ||
-        editing.existingAttachments.some((attachment) => attachment.id === record.attachmentId),
-    );
-    const newRecords =
-      buildMessageContext({
-        terminalContexts: content.terminalContexts.filter(
-          (context) => context.text.trim().length > 0,
-        ),
-        reviewComments: content.reviewComments,
-        previewAnnotations: content.previewAnnotations,
-        threadContexts: content.threadContexts,
-        attachments: newAttachments.map((attachment, index) => ({
-          attachment,
-          attachmentId: uploads[editing.existingAttachments.length + index]?.id ?? attachment.id,
-        })),
-      })?.records ?? [];
     const result = await input.editQueuedRun({
       environmentId,
       input: {
@@ -150,17 +120,7 @@ async function submitQueuedRunEdit(input: {
         text: editText.length === 0 ? ATTACHMENT_ONLY_BOOTSTRAP_PROMPT : editText,
         edit: {
           messageId: editing.messageId,
-          attachments: uploads,
-          context: {
-            version: 1,
-            records: [
-              ...new Map(
-                [...keptRecords, ...newRecords].map(
-                  (record) => [record.contextId, record] as const,
-                ),
-              ).values(),
-            ],
-          },
+          ...payload,
         },
       },
     });
@@ -201,7 +161,8 @@ export function useQueuedRunEdit(input: {
   } = input;
   const editQueuedRunCommand = useEditQueuedRunCommand();
   const acquireEdit = useAtomCommand(threadEnvironment.beginQueuedRunEdit);
-  const releaseEdit = useAtomCommand(threadEnvironment.cancelQueuedRunEdit, {
+  const releaseEdit = useAtomCommand(threadEnvironment.cancelQueuedRunEdit);
+  const releaseFailedPreparation = useAtomCommand(threadEnvironment.cancelQueuedRunEdit, {
     reportFailure: false,
   });
   const threadState = useEnvironmentThread(environmentId, activeThreadId);
@@ -220,7 +181,6 @@ export function useQueuedRunEdit(input: {
           ...activeEdit,
           ...activeEdit.ownership,
           threadId: activeThreadId,
-          existingAttachments: [],
         }
       : null;
   const saveInFlightRef = useRef(false);
@@ -239,21 +199,6 @@ export function useQueuedRunEdit(input: {
     editing !== null
       ? queuedEditDraftTarget(routeThreadRef, editing.runId)
       : (selectedRecoveryTarget ?? threadDraftTarget);
-
-  const imageResources = (editing?.existingAttachments ?? [])
-    .filter((attachment) => attachment.type === "image")
-    .map((attachment) => ({ _tag: "attachment" as const, attachmentId: attachment.id }));
-  const imageUrls = useAssetUrls(environmentId, imageResources);
-  const urlByAttachmentId = new Map(
-    imageResources.map((resource, index) => [resource.attachmentId, imageUrls[index] ?? null]),
-  );
-  const editingAttachments =
-    editing === null
-      ? null
-      : editing.existingAttachments.map((attachment) => ({
-          attachment,
-          url: urlByAttachmentId.get(attachment.id) ?? null,
-        }));
 
   const focusComposerSoon = () => {
     window.requestAnimationFrame(() => composerRef.current?.focusAtEnd());
@@ -334,7 +279,7 @@ export function useQueuedRunEdit(input: {
           },
         });
       } catch (error) {
-        await releaseEdit({
+        await releaseFailedPreparation({
           environmentId,
           input: { threadId: activeThreadId, runId: request.runId, editId: acquired.value.editId },
         });
@@ -364,12 +309,6 @@ export function useQueuedRunEdit(input: {
     clearEditDraft(editing.runId);
     focusComposerSoon();
   });
-  const removeEditingAttachment = (attachmentId: string) => {
-    const store = useComposerDraftStore.getState();
-    store.removeImage(draftTarget, attachmentId);
-    store.removeFile(draftTarget, attachmentId);
-  };
-
   useEffect(() => {
     if (
       editing === null ||
@@ -410,21 +349,14 @@ export function useQueuedRunEdit(input: {
   ) => {
     if (editing === null || saveInFlightRef.current) return;
     const newAttachments = [...content.images, ...content.files];
-    if (
-      editing.existingAttachments.length + newAttachments.length >
-      PROVIDER_SEND_TURN_MAX_ATTACHMENTS
-    ) {
+    if (newAttachments.length > PROVIDER_SEND_TURN_MAX_ATTACHMENTS) {
       setThreadError(
         editing.threadId,
         `A message can have at most ${PROVIDER_SEND_TURN_MAX_ATTACHMENTS} attachments.`,
       );
       return;
     }
-    if (
-      content.prompt.trim().length === 0 &&
-      editing.existingAttachments.length === 0 &&
-      newAttachments.length === 0
-    ) {
+    if (content.prompt.trim().length === 0 && newAttachments.length === 0) {
       return;
     }
     saveInFlightRef.current = true;
@@ -455,10 +387,8 @@ export function useQueuedRunEdit(input: {
     isEditing: editing !== null,
     isSaving,
     draftTarget,
-    editingAttachments,
     beginEdit,
     cancelEdit,
-    removeEditingAttachment,
     saveEdit,
   };
 }

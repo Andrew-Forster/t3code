@@ -202,7 +202,6 @@ export interface ThreadDetailScreenProps {
   readonly canSteerActiveTurn: boolean;
   readonly isSavingQueuedEdit: boolean;
   readonly onCancelQueuedRunEdit: () => void;
-  readonly onRemoveQueuedEditAttachment: (attachmentId: string) => void;
   readonly environmentId: EnvironmentId;
   readonly projectWorkspaceRoot: string | null;
   readonly threadCwd: string | null;
@@ -1357,9 +1356,7 @@ export const ThreadDetailScreen = function ThreadDetailScreen(props: ThreadDetai
                           props.queuedRunEdit === null
                             ? null
                             : {
-                                existingAttachments: props.queuedRunEdit.existingAttachments,
                                 saving: props.isSavingQueuedEdit,
-                                onRemoveExistingAttachment: props.onRemoveQueuedEditAttachment,
                               }
                         }
                         bottomInset={composerBottomInset}

@@ -3279,6 +3279,16 @@ const composerDraftStore = create<ComposerDraftStoreState>()(
             }
             const nextDraft: ComposerThreadDraftState = {
               ...current,
+              ...(current.queuedEdit && current.queuedEdit.originalAttachmentIds.includes(imageId)
+                ? {
+                    queuedEdit: {
+                      ...current.queuedEdit,
+                      removedAttachmentIds: [
+                        ...new Set([...(current.queuedEdit.removedAttachmentIds ?? []), imageId]),
+                      ],
+                    },
+                  }
+                : {}),
               prompt: removeInlineContextReference(
                 current.prompt,
                 toKindScopedComposerContextId("image", imageId),
@@ -3391,6 +3401,16 @@ const composerDraftStore = create<ComposerDraftStoreState>()(
             }
             const nextDraft = {
               ...current,
+              ...(current.queuedEdit && current.queuedEdit.originalAttachmentIds.includes(fileId)
+                ? {
+                    queuedEdit: {
+                      ...current.queuedEdit,
+                      removedAttachmentIds: [
+                        ...new Set([...(current.queuedEdit.removedAttachmentIds ?? []), fileId]),
+                      ],
+                    },
+                  }
+                : {}),
               prompt: removeInlineContextReference(
                 current.prompt,
                 toKindScopedComposerContextId("file", fileId),

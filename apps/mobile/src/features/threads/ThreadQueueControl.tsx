@@ -87,6 +87,9 @@ export function ThreadQueueSheet({ route }: StaticScreenProps<QueueTarget>) {
   const promote = useAtomCommand(threadEnvironment.promoteQueuedRun, "promote queued message");
   const acquireEdit = useAtomCommand(threadEnvironment.beginQueuedRunEdit, "edit queued message");
   const releaseEdit = useAtomCommand(threadEnvironment.cancelQueuedRunEdit, "finish queued edit");
+  const releaseFailedPreparation = useAtomCommand(threadEnvironment.cancelQueuedRunEdit, {
+    reportFailure: false,
+  });
   const cancel = useAtomCommand(threadEnvironment.cancelQueuedRun, "remove queued message");
   const resume = useAtomCommand(threadEnvironment.resumeThreadQueue, "resume queue");
   const [resuming, setResuming] = useState(false);
@@ -234,7 +237,7 @@ export function ThreadQueueSheet({ route }: StaticScreenProps<QueueTarget>) {
                   }),
               );
         } catch (error) {
-          await releaseEdit({
+          await releaseFailedPreparation({
             environmentId: target.environmentId,
             input: { threadId: target.threadId, runId, editId: acquired.value.editId },
           });
@@ -252,7 +255,7 @@ export function ThreadQueueSheet({ route }: StaticScreenProps<QueueTarget>) {
             runId,
             messageId: entry.messageId,
             originalText: entry.text,
-            existingAttachments: entry.attachments,
+            originalAttachmentIds: entry.attachments.map((attachment) => attachment.id),
             ...(entry.context ? { context: entry.context } : {}),
           },
           attachments,

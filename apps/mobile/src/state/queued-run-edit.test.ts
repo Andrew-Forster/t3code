@@ -1,3 +1,7 @@
+import {
+  collectComposerContextReferences,
+  formatComposerContextReference,
+} from "@t3tools/shared/composerContextReferences";
 import { describe, expect, it, vi } from "vite-plus/test";
 vi.mock("../lib/uuid", () => ({ uuidv4: () => "saved-edit" }));
 import {
@@ -8,7 +12,6 @@ import {
   MessageId,
   RunId,
   type ChatAttachment,
-  type OrchestrationMessageContext,
 } from "@t3tools/contracts";
 
 import { composerDraftEnvironmentId } from "../lib/composerAttachmentUploadQueue";
@@ -28,11 +31,12 @@ import {
   decodePersistedComposerState,
   getComposerDraftSnapshot,
   replaceComposerDraftAttachments,
+  removeComposerDraftAttachment,
   setComposerDraftText,
 } from "./use-composer-drafts";
 
-const image = (id: string): ChatAttachment => ({
-  type: "image",
+const image = (id: string) => ({
+  type: "image" as const,
   id: ChatAttachmentId.make(id),
   name: `${id}.png`,
   mimeType: "image/png",
@@ -46,23 +50,7 @@ function edit(attachments: ReadonlyArray<ChatAttachment>): QueuedRunEdit {
     runId: RunId.make("run-1"),
     messageId: MessageId.make("message-1"),
     originalText: "original",
-    existingAttachments: attachments,
-  };
-}
-
-function context(attachmentIds: ReadonlyArray<string>): OrchestrationMessageContext {
-  return {
-    version: 1,
-    records: attachmentIds.map((attachmentId, index) => ({
-      version: 1,
-      kind: "image",
-      contextId: ComposerContextId.make(`ctx-${index}`),
-      label: `${attachmentId}.png`,
-      attachmentId,
-      name: `${attachmentId}.png`,
-      mimeType: "image/png",
-      sizeBytes: 10,
-    })),
+    originalAttachmentIds: attachments.map((attachment) => attachment.id),
   };
 }
 
@@ -172,7 +160,7 @@ describe("resolveQueuedEditPayload", () => {
         beginQueuedRunEdit(
           threadKey,
           editing,
-          editing.existingAttachments.map((attachment) => ({
+          [image("first"), image("second")].map((attachment) => ({
             type: "image" as const,
             id: attachment.id,
             name: attachment.name,
@@ -228,51 +216,66 @@ describe("resolveQueuedEditPayload", () => {
     },
   );
 
-  it("resends the kept server attachments ahead of the newly uploaded ones", () => {
-    const payload = resolveQueuedEditPayload({
-      edit: edit([image("kept")]),
-      draftContext: undefined,
-      draftAttachments: [{ id: "draft-1" }],
-      uploaded: [image("uploaded")],
-    });
-
-    expect(payload.attachments.map((attachment) => attachment.id)).toEqual(["kept", "uploaded"]);
-  });
-
-  it("rebinds context records from the draft's ids to the uploaded ones", () => {
-    const payload = resolveQueuedEditPayload({
-      edit: edit([]),
-      draftContext: context(["draft-1"]),
-      draftAttachments: [{ id: "draft-1" }],
-      uploaded: [image("uploaded")],
-    });
-
-    expect(payload.context?.records).toEqual([
-      expect.objectContaining({ attachmentId: "uploaded" }),
-    ]);
-  });
-
-  it("drops the record of an attachment the user removed", () => {
-    const payload = resolveQueuedEditPayload({
-      edit: edit([image("kept")]),
-      draftContext: context(["kept", "gone"]),
-      draftAttachments: [],
-      uploaded: [],
-    });
-
-    expect(payload.attachments.map((attachment) => attachment.id)).toEqual(["kept"]);
-    expect(payload.context?.records).toEqual([expect.objectContaining({ attachmentId: "kept" })]);
-  });
-
-  it("returns no context when every record lost its attachment", () => {
-    const payload = resolveQueuedEditPayload({
-      edit: edit([]),
-      draftContext: context(["gone"]),
-      draftAttachments: [],
-      uploaded: [],
-    });
-
-    expect(payload.attachments).toEqual([]);
-    expect(payload.context).toBeUndefined();
+  it("keeps distinct stored context identities on save and removes references with their attachments", () => {
+    vi.useFakeTimers();
+    try {
+      const threadKey = "env:binding";
+      const draftKey = queuedEditDraftKey(threadKey, "run-1");
+      const saved = [
+        image("server-image"),
+        { ...image("server-file"), type: "file" as const, mimeType: "application/pdf" },
+      ];
+      const records = saved.map((attachment, index) => ({
+        version: 1 as const,
+        contextId: ComposerContextId.make(`local-context-${index}`),
+        ...(attachment.type === "file" ? { kind: "file" as const } : { kind: "image" as const }),
+        label: attachment.name,
+        attachmentId: attachment.id,
+        name: attachment.name,
+        mimeType: attachment.mimeType,
+        sizeBytes: attachment.sizeBytes,
+      }));
+      const originalText = records.map(formatComposerContextReference).join(" ");
+      appAtomRegistry.set(composerDraftsAtom, {});
+      beginQueuedRunEdit(
+        threadKey,
+        { ...edit(saved), originalText, context: { version: 1, records } },
+        saved.map((attachment) => ({
+          ...attachment,
+          ...(attachment.type === "file"
+            ? { type: "file" as const, fileUri: "file:///report.pdf" }
+            : {
+                type: "image" as const,
+                previewUri: "data:image/png;base64,YWJj",
+                dataUrl: "data:image/png;base64,YWJj",
+              }),
+        })),
+      );
+      const draft = getComposerDraftSnapshot(draftKey);
+      expect(collectComposerContextReferences(draft.text)).toHaveLength(2);
+      const kept = resolveQueuedEditPayload({
+        draftContext: draft.context,
+        draftAttachments: draft.attachments,
+        uploaded: saved,
+      });
+      expect(kept.attachments).toEqual(saved);
+      expect(kept.context?.records.map((record) => record.contextId)).toEqual(
+        records.map((record) => record.contextId),
+      );
+      for (const attachment of saved) removeComposerDraftAttachment(draftKey, attachment.id);
+      const removed = getComposerDraftSnapshot(draftKey);
+      expect(collectComposerContextReferences(removed.text)).toEqual([]);
+      expect(
+        resolveQueuedEditPayload({
+          draftContext: removed.context,
+          draftAttachments: removed.attachments,
+          uploaded: [],
+        }),
+      ).toEqual({ attachments: [], context: undefined });
+    } finally {
+      appAtomRegistry.set(composerDraftsAtom, {});
+      vi.clearAllTimers();
+      vi.useRealTimers();
+    }
   });
 });

@@ -27,7 +27,6 @@ import {
   getComposerDraftSnapshot,
   composerDraftsAtom,
   appendComposerDraftAttachments,
-  removeComposerDraftAttachment,
 } from "./use-composer-drafts";
 
 export interface QueuedRunEdit {
@@ -36,8 +35,7 @@ export interface QueuedRunEdit {
   readonly runId: RunId;
   readonly messageId: MessageId;
   readonly originalText: string;
-  readonly originalAttachmentIds?: ReadonlyArray<string>;
-  readonly existingAttachments: ReadonlyArray<ChatAttachment>;
+  readonly originalAttachmentIds: ReadonlyArray<string>;
   readonly context?: OrchestrationMessageContext;
 }
 
@@ -98,7 +96,7 @@ function activeEditDraft(
 }
 
 function editFromDraft(draft: QueuedRunEditDraft | null): QueuedRunEdit | null {
-  return draft?.ownership ? { ...draft, ...draft.ownership, existingAttachments: [] } : null;
+  return draft?.ownership ? { ...draft, ...draft.ownership } : null;
 }
 
 export function getQueuedRunEdit(threadKey: string | null): QueuedRunEdit | null {
@@ -132,7 +130,7 @@ export function canReuseQueuedRunEditDraft(
   threadKey: string,
   runId: RunId,
   text: string,
-  attachments: ReadonlyArray<ChatAttachment>,
+  attachments: ReadonlyArray<{ readonly id: string }>,
 ) {
   return queuedEditDraftMatchesSource(
     getComposerDraftSnapshot(queuedEditDraftKey(threadKey, runId)).queuedEdit,
@@ -157,7 +155,7 @@ export function beginQueuedRunEdit(
     threadKey,
     edit.runId,
     edit.originalText,
-    edit.existingAttachments,
+    edit.originalAttachmentIds.map((id) => ({ id })),
   );
   if (existing && !reuse) {
     updateComposerDrafts((current) => {
@@ -172,15 +170,7 @@ export function beginQueuedRunEdit(
   if (!reuse) {
     setComposerDraftText(draftKey, edit.originalText);
     setComposerDraftContext(draftKey, edit.context);
-    appendComposerDraftAttachments(
-      draftKey,
-      attachments.filter((attachment) => attachment.type === "image"),
-    );
-    appendComposerDraftAttachments(
-      draftKey,
-      attachments.filter((attachment) => attachment.type === "file"),
-      { appendReference: true },
-    );
+    appendComposerDraftAttachments(draftKey, attachments);
   }
   updateComposerDrafts((current) => {
     const draft = current[draftKey] ?? { text: "", attachments: [] };
@@ -193,7 +183,7 @@ export function beginQueuedRunEdit(
           messageId: edit.messageId,
           sourceText: edit.originalText,
           originalText: reuse ? (existing?.queuedEdit?.originalText ?? draft.text) : draft.text,
-          originalAttachmentIds: edit.existingAttachments.map((attachment) => attachment.id),
+          originalAttachmentIds: edit.originalAttachmentIds,
           ...(edit.context ? { context: edit.context } : {}),
           ownership: { editId: edit.editId, sequence: edit.sequence },
         },
@@ -216,12 +206,6 @@ export function recoverQueuedRunEdit(threadKey: string): boolean {
   return dirty;
 }
 
-export function removeQueuedRunEditAttachment(threadKey: string, attachmentId: string): void {
-  const edit = getQueuedRunEdit(threadKey);
-  if (edit === null) return;
-  removeComposerDraftAttachment(queuedEditDraftKey(threadKey, edit.runId), attachmentId);
-}
-
 export function endQueuedRunEdit(
   threadKey: string,
   options?: { readonly deferAttachmentCleanup?: boolean },
@@ -236,7 +220,6 @@ export function endQueuedRunEdit(
  * are resent alongside the newly uploaded ones, in composer order.
  */
 export function resolveQueuedEditPayload(input: {
-  readonly edit: QueuedRunEdit;
   readonly draftContext: OrchestrationMessageContext | undefined;
   readonly draftAttachments: ReadonlyArray<{ readonly id: string }>;
   readonly uploaded: ReadonlyArray<ChatAttachment | UploadChatAttachment>;
@@ -244,7 +227,7 @@ export function resolveQueuedEditPayload(input: {
   readonly attachments: ReadonlyArray<ChatAttachment | UploadChatAttachment>;
   readonly context: OrchestrationMessageContext | undefined;
 } {
-  const attachments = [...input.edit.existingAttachments, ...input.uploaded];
+  const attachments = input.uploaded;
   const rebound = uploadedComposerContext(
     input.draftContext,
     input.draftAttachments,

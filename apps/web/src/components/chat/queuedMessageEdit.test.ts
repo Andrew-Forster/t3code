@@ -1,4 +1,15 @@
-import { CommandId, EnvironmentId, MessageId, RunId, ThreadId } from "@t3tools/contracts";
+import {
+  collectComposerContextReferences,
+  formatComposerContextReference,
+} from "@t3tools/shared/composerContextReferences";
+import {
+  CommandId,
+  ComposerContextId,
+  EnvironmentId,
+  MessageId,
+  RunId,
+  ThreadId,
+} from "@t3tools/contracts";
 import { scopeThreadRef } from "@t3tools/client-runtime/environment";
 import { afterAll, beforeEach, describe, expect, it, vi } from "vite-plus/test";
 vi.hoisted(() => {
@@ -21,7 +32,7 @@ import {
   type ComposerImageAttachment,
 } from "../../composerDraftStore";
 import {
-  prepareQueuedEditAttachments,
+  prepareQueuedEditPayload,
   prepareQueuedMessageEditDraft,
   recoverQueuedMessageEdit,
   releaseQueuedMessageEditDraft,
@@ -54,6 +65,15 @@ const image: ComposerImageAttachment = {
   file: new File(["image"], "screen.png", { type: "image/png" }),
   previewUrl: "blob:screen",
 };
+const emptyContent = {
+  images: [],
+  files: [],
+  terminalContexts: [],
+  reviewComments: [],
+  previewAnnotations: [],
+  threadContexts: [],
+};
+const payloadEdit = { ...edit, sourceText: "", originalText: "", originalAttachmentIds: [] };
 const uploadedFile = {
   type: "file" as const,
   id: "upload:report",
@@ -71,40 +91,26 @@ describe("queued message file edits", () => {
     { images: [], label: "file-only" },
     { images: [image], label: "mixed" },
   ])("preserves a generic file in a $label save", async ({ images }) => {
-    const attachments = await prepareQueuedEditAttachments({
-      existingAttachments: [],
-      images,
-      files: [file],
+    const attachments = await prepareQueuedEditPayload({
+      edit: payloadEdit,
+      content: { ...emptyContent, images, files: [file] },
       uploadFiles: async () => [uploadedFile],
       readImage: async () => "data:image/png;base64,aW1hZ2U=",
     });
-    expect(attachments.at(-1)).toEqual(uploadedFile);
-    expect(attachments.length).toBe(images.length + 1);
+    expect(attachments.attachments.at(-1)).toEqual(uploadedFile);
+    expect(attachments.attachments.length).toBe(images.length + 1);
     if (images.length > 0)
-      expect(attachments[0]).toMatchObject({
+      expect(attachments.attachments[0]).toMatchObject({
         type: "image",
         dataUrl: "data:image/png;base64,aW1hZ2U=",
       });
   });
 
-  it("retains saved attachments alongside newly uploaded files", async () => {
-    const saved = { ...uploadedFile, id: "saved:earlier" };
-    const attachments = await prepareQueuedEditAttachments({
-      existingAttachments: [saved],
-      images: [],
-      files: [file],
-      uploadFiles: async () => [uploadedFile],
-      readImage: async () => "unused",
-    });
-    expect(attachments).toEqual([saved, uploadedFile]);
-  });
-
   it("fails a save instead of dropping a file whose upload is missing", async () => {
     await expect(
-      prepareQueuedEditAttachments({
-        existingAttachments: [],
-        images: [image],
-        files: [file],
+      prepareQueuedEditPayload({
+        edit: payloadEdit,
+        content: { ...emptyContent, images: [image], files: [file] },
         uploadFiles: async () => [],
         readImage: async () => "image",
       }),
@@ -273,4 +279,142 @@ describe("queued message file edits", () => {
       expect(store.getComposerDraft(threadTarget)?.prompt).toBe("Unrelated main draft");
     },
   );
+  it("saves bound existing image and file references, then removes them without orphaning text", async () => {
+    const store = useComposerDraftStore.getState();
+    const savedImage = {
+      type: "image" as const,
+      id: "server-image",
+      name: "screen.png",
+      mimeType: "image/png",
+      sizeBytes: 5,
+    };
+    const savedFile = { ...uploadedFile, id: "server-file" };
+    const attachments = [savedFile, savedImage];
+    const records = attachments.map((attachment, index) => ({
+      version: 1 as const,
+      ...(attachment.type === "file" ? { kind: "file" as const } : { kind: "image" as const }),
+      contextId: ComposerContextId.make(`local-context-${index}`),
+      label: attachment.name,
+      attachmentId: attachment.id,
+      name: attachment.name,
+      mimeType: attachment.mimeType,
+      sizeBytes: attachment.sizeBytes,
+    }));
+    const text = records.map(formatComposerContextReference).join(" ");
+    await prepareQueuedMessageEditDraft({
+      editTarget,
+      edit: { ...edit, context: { version: 1, records } },
+      environmentId,
+      text,
+      attachments,
+      readImage: async () => ({ file: image.file, dataUrl: "data:image/png;base64,aW1hZ2U=" }),
+    });
+    const save = () => {
+      const draft = store.getComposerDraft(editTarget)!;
+      return prepareQueuedEditPayload({
+        edit: draft.queuedEdit!,
+        content: draft,
+        readImage: async () => "data:image/png;base64,aW1hZ2U=",
+        uploadFiles: async (files) =>
+          files.map((file) => ({ ...savedFile, id: file.uploadedAttachmentId! })),
+      });
+    };
+    store.setPrompt(editTarget, store.getComposerDraft(editTarget)!.prompt + " edited");
+    const kept = await save();
+    expect(kept.attachments.map((attachment) => attachment.id)).toEqual([
+      savedFile.id,
+      savedImage.id,
+    ]);
+    const refs = collectComposerContextReferences(store.getComposerDraft(editTarget)!.prompt);
+    expect(refs).toHaveLength(2);
+    for (const ref of refs) {
+      expect(
+        kept.context.records.find((record) => record.contextId === ref.contextId),
+      ).toMatchObject({
+        attachmentId: ref.kind === "image" ? savedImage.id : savedFile.id,
+      });
+    }
+    const savedText = store.getComposerDraft(editTarget)!.prompt;
+    store.clearComposerContent(editTarget);
+    await prepareQueuedMessageEditDraft({
+      editTarget,
+      edit: { ...edit, context: kept.context },
+      environmentId,
+      text: savedText,
+      attachments: kept.attachments,
+      readImage: async () => ({ file: image.file, dataUrl: "data:image/png;base64,aW1hZ2U=" }),
+    });
+    store.removeImage(editTarget, savedImage.id);
+    store.removeFile(editTarget, savedFile.id);
+    const persisted = JSON.parse(
+      JSON.stringify(partializeComposerDraftStoreState(useComposerDraftStore.getState())),
+    );
+    const merge = useComposerDraftStore.persist.getOptions().merge!;
+    useComposerDraftStore.setState(merge(persisted, useComposerDraftStore.getState()));
+    const removed = await save();
+    expect(removed.attachments).toEqual([]);
+    expect(removed.context.records).toEqual([]);
+    expect(collectComposerContextReferences(store.getComposerDraft(editTarget)!.prompt)).toEqual(
+      [],
+    );
+  });
+
+  it("rejects an image lost during persistence but saves an intentional removal after hydration", async () => {
+    const store = useComposerDraftStore.getState();
+    const saved = {
+      type: "image" as const,
+      id: "server-image",
+      name: image.name,
+      mimeType: image.mimeType,
+      sizeBytes: image.sizeBytes,
+    };
+    const prepare = () =>
+      prepareQueuedMessageEditDraft({
+        editTarget,
+        edit,
+        environmentId,
+        text: "Original",
+        attachments: [saved],
+        readImage: async () => ({ file: image.file, dataUrl: "data:image/png;base64,aW1hZ2U=" }),
+      });
+    await prepare();
+    store.setPrompt(threadTarget, "Occupied draft");
+    // Simulate the quota verifier omitting the image while retaining owned edit metadata.
+    const persisted = JSON.parse(
+      JSON.stringify(partializeComposerDraftStoreState(useComposerDraftStore.getState())),
+    );
+    persisted.draftsByThreadKey[editTarget].attachments = [];
+    const merge = useComposerDraftStore.persist.getOptions().merge!;
+    useComposerDraftStore.setState(merge(persisted, useComposerDraftStore.getState()));
+    const save = () => {
+      const draft = store.getComposerDraft(editTarget)!;
+      return prepareQueuedEditPayload({
+        edit: draft.queuedEdit!,
+        content: draft,
+        readImage: async () => "unused",
+        uploadFiles: async () => [],
+      });
+    };
+    await expect(save()).rejects.toThrow("attachment could not be restored");
+    expect(
+      recoverQueuedMessageEdit({
+        editTarget,
+        threadTarget,
+        originalText: "Original",
+        originalAttachmentIds: [saved.id],
+      }),
+    ).toBe("retained");
+    expect(store.getComposerDraft(threadTarget)?.prompt).toBe("Occupied draft");
+    // Missing content cannot be reused as an intentional selection when reopening.
+    await prepare();
+    expect(store.getComposerDraft(editTarget)?.images.map((image) => image.id)).toEqual([saved.id]);
+    store.removeImage(editTarget, saved.id);
+    const removed = JSON.parse(
+      JSON.stringify(partializeComposerDraftStoreState(useComposerDraftStore.getState())),
+    );
+    useComposerDraftStore.setState(merge(removed, useComposerDraftStore.getState()));
+    expect((await save()).attachments).toEqual([]);
+    await prepare();
+    expect(store.getComposerDraft(editTarget)?.images).toEqual([]);
+  });
 });

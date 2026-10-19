@@ -104,7 +104,6 @@ import {
   getQueuedEditRecovery,
   getQueuedRunEdit,
   queuedEditDraftKey,
-  removeQueuedRunEditAttachment,
   resolveQueuedEditPayload,
   useQueuedRunEdit,
 } from "./queued-run-edit";
@@ -207,7 +206,7 @@ export function useThreadComposerState() {
     reportFailure: false,
   });
   const releaseQueuedEdit = useAtomCommand(threadEnvironment.cancelQueuedRunEdit, {
-    reportFailure: false,
+    label: "cancel queued edit",
   });
   const editThreadState = useEnvironmentThread(
     selectedThreadShell?.environmentId ?? null,
@@ -428,11 +427,6 @@ export function useThreadComposerState() {
     if (result._tag === "Success") endQueuedRunEdit(selectedThreadKey);
   };
 
-  const onRemoveQueuedEditAttachment = (attachmentId: string) => {
-    if (selectedThreadKey === null) return;
-    removeQueuedRunEditAttachment(selectedThreadKey, attachmentId);
-  };
-
   const saveQueuedRunEdit = async () => {
     const thread = selectedThreadShell;
     if (!thread || savingQueuedEditRef.current) return;
@@ -446,10 +440,7 @@ export function useThreadComposerState() {
       Dialog.alert("Add a message", "A queued message cannot be left empty.");
       return;
     }
-    if (
-      edit.existingAttachments.length + draft.attachments.length >
-      PROVIDER_SEND_TURN_MAX_ATTACHMENTS
-    ) {
+    if (draft.attachments.length > PROVIDER_SEND_TURN_MAX_ATTACHMENTS) {
       Dialog.alert(
         "Too many attachments",
         `Remove attachments until there are at most ${PROVIDER_SEND_TURN_MAX_ATTACHMENTS}.`,
@@ -482,7 +473,6 @@ export function useThreadComposerState() {
       return;
     }
     const payload = resolveQueuedEditPayload({
-      edit,
       draftContext: draft.context,
       draftAttachments: draft.attachments,
       uploaded: prepared.value.attachments,
@@ -988,7 +978,6 @@ export function useThreadComposerState() {
     },
     isSavingQueuedEdit,
     cancelQueuedRunEdit,
-    onRemoveQueuedEditAttachment,
     modelSelection,
     pendingHandoff,
     canSwitchThreadProvider,

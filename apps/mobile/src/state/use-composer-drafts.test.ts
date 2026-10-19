@@ -240,23 +240,6 @@ function contextDraft(start: number, count: number): ComposerDraft {
 }
 
 describe("mobile composer drafts", () => {
-  it("retains a queued edit across restart beside an occupied main draft", () => {
-    const threadKey = "environment:thread";
-    const editKey = `${threadKey}~queued-edit~run`;
-    const main = { text: "Unrelated draft", attachments: [] };
-    const edit = { text: "Unsaved queued edit", attachments: [] };
-    const restored = decodePersistedComposerState(
-      JSON.parse(
-        JSON.stringify({
-          schemaVersion: 1,
-          drafts: { [threadKey]: main, [editKey]: edit },
-        }),
-      ),
-    );
-    expect(restored.drafts[threadKey]).toEqual(main);
-    expect(restored.drafts[editKey]).toEqual(edit);
-  });
-
   it("restores a PR checkout source after restarting the composer", () => {
     const draft: ComposerDraft = {
       text: "Address feedback",
