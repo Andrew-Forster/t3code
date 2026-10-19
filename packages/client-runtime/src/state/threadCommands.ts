@@ -25,8 +25,6 @@ import {
   type CreateThreadInput,
   type DeleteThreadInput,
   type EditQueuedRunInput,
-  type BeginQueuedRunEditInput,
-  type CancelQueuedRunEditInput,
   type InterruptThreadTurnInput,
   type MarkThreadUnreadInput,
   type ForkThreadFromRunInput,
@@ -61,8 +59,6 @@ import {
   createThread,
   deleteThread,
   editQueuedRun,
-  beginQueuedRunEdit,
-  cancelQueuedRunEdit,
   interruptThreadTurn,
   forkThreadFromRun,
   markThreadUnread,
@@ -120,6 +116,7 @@ export type {
   RespondToThreadApprovalInput,
   RespondToThreadUserInputInput,
   DismissThreadUserInputInput,
+  RetryWorkspacePreparationInput,
   RevertThreadCheckpointInput,
   SetThreadInteractionModeInput,
   SetThreadRuntimeModeInput,
@@ -376,18 +373,6 @@ export function createThreadEnvironmentAtoms<R, E>(
       scheduler,
       concurrency,
     }),
-    beginQueuedRunEdit: createEnvironmentCommand(runtime, {
-      label: "environment-data:commands:thread:begin-queued-run-edit",
-      execute: (input: BeginQueuedRunEditInput) => beginQueuedRunEdit(input),
-      scheduler,
-      concurrency,
-    }),
-    cancelQueuedRunEdit: createEnvironmentCommand(runtime, {
-      label: "environment-data:commands:thread:cancel-queued-run-edit",
-      execute: (input: CancelQueuedRunEditInput) => cancelQueuedRunEdit(input),
-      scheduler,
-      concurrency,
-    }),
     loadEarlierHistory: createEnvironmentCommand(runtime, {
       label: "environment-data:commands:thread:load-earlier-history",
       execute: (input: LoadEarlierThreadHistoryInput) =>
@@ -458,11 +443,7 @@ export function createThreadEnvironmentAtoms<R, E>(
             ...thread,
             pendingRuntimeRequest: null,
             snoozedUntil: DateTime.makeUnsafe(input.snoozedUntil),
-            snoozedAt:
-              thread.snoozedUntil != null &&
-              DateTime.formatIso(thread.snoozedUntil) === input.snoozedUntil
-                ? (thread.snoozedAt ?? now)
-                : now,
+            snoozedAt: now,
           },
     ),
     unsnooze: optimistic.wrap(commands.unsnooze, (thread) => ({

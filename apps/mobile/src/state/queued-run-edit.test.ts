@@ -1,7 +1,6 @@
 import { describe, expect, it } from "vite-plus/test";
 import {
   ChatAttachmentId,
-  CommandId,
   ComposerContextId,
   MessageId,
   RunId,
@@ -23,8 +22,6 @@ const image = (id: string): ChatAttachment => ({
 
 function edit(attachments: ReadonlyArray<ChatAttachment>): QueuedRunEdit {
   return {
-    editId: CommandId.make("edit-1"),
-    sequence: 1,
     runId: RunId.make("run-1"),
     messageId: MessageId.make("message-1"),
     originalText: "original",
@@ -85,7 +82,6 @@ describe("resolveQueuedEditPayload", () => {
 
   it("drops the record of an attachment the user removed", () => {
     const payload = resolveQueuedEditPayload({
-      // "gone" was on the message and has been removed from the kept list.
       edit: edit([image("kept")]),
       draftContext: context(["kept", "gone"]),
       draftAttachments: [],

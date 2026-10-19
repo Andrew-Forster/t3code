@@ -1,6 +1,4 @@
 import {
-  CommandId,
-  RunId,
   EnvironmentId,
   EventId,
   MessageId,
@@ -43,7 +41,6 @@ import * as ThreadHistoryController from "./threadHistoryController.ts";
 import {
   EMPTY_ENVIRONMENT_THREAD_STATE,
   makeEnvironmentThreadState,
-  queuedRunEditOwnership,
   type EnvironmentThreadState,
   type ThreadSnapshotLoadResult,
 } from "./threads.ts";
@@ -323,88 +320,6 @@ const deleted = (sequence = 3): OrchestrationV2ThreadStreamItem => {
 };
 
 describe("EnvironmentThreads", () => {
-  it.effect.each([null, CommandId.make("previous-editor")])(
-    "keeps an acquired editor open while the projection still has edit ID %s",
-    (previousEditId) =>
-      Effect.gen(function* () {
-        const run = {
-          id: RunId.make("queued-edit-run"),
-          threadId: THREAD_ID,
-          ordinal: 1,
-          providerInstanceId: BASE_PROJECTION.thread.providerInstanceId,
-          modelSelection: BASE_PROJECTION.thread.modelSelection,
-          providerThreadId: null,
-          userMessageId: MessageId.make("queued-edit-message"),
-          rootNodeId: null,
-          activeAttemptId: null,
-          status: "queued" as const,
-          queueEditId: previousEditId,
-          requestedAt: BASE_PROJECTION.updatedAt,
-          startedAt: null,
-          completedAt: null,
-          checkpointId: null,
-          contextHandoffId: null,
-        };
-        const h = yield* makeHarness({ cached: { ...BASE_PROJECTION, runs: [run] } });
-        const before = yield* awaitThreadState(h.observed, (value) => value.status === "live");
-        const edit = { runId: run.id, editId: CommandId.make("accepted-editor"), sequence: 10 };
-        expect(queuedRunEditOwnership(before, edit)).toBe("pending");
-
-        yield* Queue.offer(h.inputs, titleUpdated("An earlier buffered update", 9));
-        const buffered = yield* awaitThreadState(h.observed, (value) => value.sequence === 9);
-        expect(queuedRunEditOwnership(buffered, edit)).toBe("pending");
-
-        yield* Queue.offer(h.inputs, {
-          kind: "event",
-          sequence: edit.sequence,
-          event: {
-            id: EventId.make("edit-acquired"),
-            type: "run.updated",
-            threadId: THREAD_ID,
-            occurredAt: BASE_PROJECTION.updatedAt,
-            payload: { ...run, queueEditId: edit.editId },
-          },
-        });
-        const acquired = yield* awaitThreadState(h.observed, (value) => value.sequence === 10);
-        expect(queuedRunEditOwnership(acquired, edit)).toBe("owned");
-
-        for (const [index, queueEditId] of [null, CommandId.make("another-editor")].entries()) {
-          yield* Queue.offer(h.inputs, {
-            kind: "event",
-            sequence: 11 + index,
-            event: {
-              id: EventId.make(`edit-lost-${index}`),
-              type: "run.updated",
-              threadId: THREAD_ID,
-              occurredAt: BASE_PROJECTION.updatedAt,
-              payload: { ...run, queueEditId },
-            },
-          });
-          const lost = yield* awaitThreadState(
-            h.observed,
-            (value) => value.sequence === 11 + index,
-          );
-          expect(queuedRunEditOwnership(lost, edit)).toBe("lost");
-        }
-      }),
-  );
-
-  it.effect("detects a superseded edit even when a snapshot skips the acquired token", () =>
-    Effect.gen(function* () {
-      const h = yield* makeHarness({ cached: BASE_PROJECTION });
-      const before = yield* awaitThreadState(h.observed, (value) => value.status === "live");
-      const edit = {
-        runId: RunId.make("removed-run"),
-        editId: CommandId.make("edit"),
-        sequence: 10,
-      };
-      expect(queuedRunEditOwnership(before, edit)).toBe("pending");
-      yield* Queue.offer(h.inputs, snapshot(BASE_PROJECTION, 12));
-      const after = yield* awaitThreadState(h.observed, (value) => value.sequence === 12);
-      expect(queuedRunEditOwnership(after, edit)).toBe("lost");
-    }),
-  );
-
   it.effect("loads the server thread when its local cache read fails", () =>
     Effect.gen(function* () {
       const h = yield* makeHarness({
@@ -605,8 +520,6 @@ describe("EnvironmentThreads", () => {
           return 8;
         },
       });
-      // Hold the projection write while the event advances its cursor. Closing
-      // the scope must resume from the last fully applied projection.
       yield* first.threadState.semaphore.take(1);
       yield* Queue.offer(first.inputs, update);
       yield* Deferred.await(applying);
@@ -763,8 +676,6 @@ describe("EnvironmentThreads", () => {
     Effect.gen(function* () {
       const harness = yield* makeHarness({ cached: BASE_PROJECTION });
 
-      // The warm cache reaches live from the cached data, and a live event
-      // applies on top of it.
       yield* Queue.offer(harness.inputs, titleUpdated("Live title", CACHED_SNAPSHOT_SEQUENCE + 1));
       yield* awaitThreadState(
         harness.observed,
@@ -774,8 +685,6 @@ describe("EnvironmentThreads", () => {
           value.data.value.thread.title === "Live title",
       );
 
-      // The subscription resumed from the cached sequence and never fetched the
-      // full snapshot over HTTP.
       expect(yield* Ref.get(harness.lastSubscribeAfterSequence)).toBe(CACHED_SNAPSHOT_SEQUENCE);
       expect(yield* Ref.get(harness.loaderCalls)).toBe(0);
     }),
@@ -911,8 +820,6 @@ describe("EnvironmentThreads", () => {
         expanded: false,
         latestLocalTurnOrdinal: 47,
       });
-      // A transient cold HTTP failure still requests a bounded socket snapshot.
-      // Its cursor remains available for a later history request.
       expect(yield* Ref.get(harness.lastSubscribeAfterSequence)).toBeUndefined();
       expect(yield* Ref.get(harness.lastAcceptBoundedSnapshot)).toBe(true);
 
@@ -1049,7 +956,6 @@ describe("EnvironmentThreads", () => {
         }
         if (mode === "retry") {
           expect(result._tag).toBe("error");
-          // The ordinary load-earlier button must also finish a failed search load.
           expect(yield* harness.loadEarlier()).toEqual({ _tag: "loaded" });
         } else expect(result).toEqual({ _tag: "loaded" });
         const complete = yield* SubscriptionRef.get(harness.threadState);
@@ -1118,7 +1024,6 @@ describe("EnvironmentThreads", () => {
       yield* Queue.offer(harness.inputs, {
         kind: "snapshot",
         snapshotSequence: 5,
-        // Only the dependency that is not a visible local row is on the wire.
         projection: { ...BASE_PROJECTION, turnItems: [retainedRequest], visibleTurnItems },
         historyCursor: "compact-cursor",
         hasMoreHistory: true,
@@ -1135,7 +1040,6 @@ describe("EnvironmentThreads", () => {
       expect(yield* Ref.get(harness.lastAcceptBoundedSnapshot)).toBe(true);
       expect(yield* Ref.get(harness.lastAcceptCompactTurnItems)).toBe(true);
 
-      // Live updates reduce against the restored list, not the compact one.
       const updated = { ...local[1]!, output: "updated", ordinal: 2 };
       yield* Queue.offer(harness.inputs, {
         kind: "event",
@@ -1185,8 +1089,6 @@ describe("EnvironmentThreads", () => {
           snapshot: { snapshotSequence: 1, projection: httpProjection },
         },
       });
-      // No socket snapshot is pushed; only a live event arrives over the socket.
-      // It can only be applied if the HTTP snapshot already seeded the thread.
       yield* Queue.offer(harness.inputs, titleUpdated("Live title", 2));
 
       const state = yield* awaitThreadState(
@@ -1198,8 +1100,6 @@ describe("EnvironmentThreads", () => {
       );
 
       expect(Option.getOrThrow(state.data).thread.title).toBe("Live title");
-      // Cold cache: the full snapshot was loaded over HTTP and the socket
-      // resumed from that snapshot's sequence.
       expect(yield* Ref.get(harness.loaderCalls)).toBeGreaterThanOrEqual(1);
       expect(yield* Ref.get(harness.lastSubscribeAfterSequence)).toBe(1);
       expect(yield* Ref.get(harness.lastAcceptBoundedSnapshot)).toBe(true);
@@ -1242,7 +1142,6 @@ describe("EnvironmentThreads", () => {
       });
       expect(yield* Ref.get(harness.lastSubscribeAfterSequence)).toBe(11);
       expect(yield* Ref.get(harness.lastAcceptBoundedSnapshot)).toBe(true);
-      // Bounded HTTP success must not require a socket snapshot frame.
       expect(Option.getOrThrow(state.data).thread.title).toBe("Live after bounded");
     }),
   );
@@ -1263,8 +1162,6 @@ describe("EnvironmentThreads", () => {
           },
         },
       });
-      // Bounded install alone (settled) must enqueue progressive meta with the
-      // projection. Never persist the partial window as a complete full snapshot.
       yield* awaitThreadState(
         harness.observed,
         (value) =>
@@ -1282,7 +1179,6 @@ describe("EnvironmentThreads", () => {
       expect(first?.projection.thread.title).toBe("Bounded cache title");
       expect(first?.historyCursor).toBe("cursor-oldest");
       expect(first?.hasMoreHistory).toBe(true);
-      // No earlier complete-looking entry without progressive meta.
       expect(
         savedAll.some(
           (entry) =>
@@ -1292,7 +1188,6 @@ describe("EnvironmentThreads", () => {
         ),
       ).toBe(false);
 
-      // A later live update still carries the progressive cursor.
       yield* Queue.offer(harness.inputs, titleUpdated("Settled bounded", 5));
       yield* awaitThreadState(
         harness.observed,
@@ -1325,7 +1220,6 @@ describe("EnvironmentThreads", () => {
         },
       });
 
-      // Apply a live event so the subscription is known to have resumed from cache.
       yield* Queue.offer(
         harness.inputs,
         titleUpdated("Cached bounded live", CACHED_SNAPSHOT_SEQUENCE + 1),
@@ -1344,7 +1238,6 @@ describe("EnvironmentThreads", () => {
         hasMoreHistory: true,
         expanded: false,
       });
-      // Warm progressive cache must not re-download; resume via afterSequence.
       expect(yield* Ref.get(harness.loaderCalls)).toBe(0);
       expect(yield* Ref.get(harness.lastSubscribeAfterSequence)).toBe(CACHED_SNAPSHOT_SEQUENCE);
       expect(yield* Ref.get(harness.lastAcceptBoundedSnapshot)).toBe(true);
@@ -1411,8 +1304,6 @@ describe("EnvironmentThreads", () => {
             ? { resumeCache }
             : { loadCached: Effect.succeed(Option.some(saved!)) },
         );
-        // The thread may have grown past the replay budget while closed. Its
-        // warm subscription must still allow the server to bound that fallback.
         yield* Queue.offer(warm.inputs, titleUpdated("Grown while closed", 200));
         yield* awaitThreadState(
           warm.observed,
@@ -1503,7 +1394,6 @@ describe("EnvironmentThreads", () => {
         error: null,
       });
 
-      // Settled full snapshot persistence must not keep the stale cursor.
       yield* TestClock.adjust("500 millis");
       yield* Effect.yieldNow;
       const saved = (yield* Ref.get(harness.savedThreads)).at(-1);
@@ -1599,7 +1489,6 @@ describe("EnvironmentThreads", () => {
 
   it.effect("bounded HTTP install sets projection and progressive meta atomically", () =>
     Effect.gen(function* () {
-      // One setThread with explicit history (not applyItem reset + later meta).
       const harness = yield* makeHarness({
         httpSnapshot: {
           _tag: "present",
@@ -1719,11 +1608,9 @@ describe("EnvironmentThreads", () => {
         },
       });
 
-      // Allow the event to be processed without requiring a state transition.
       for (let attempt = 0; attempt < 30; attempt += 1) {
         yield* Effect.yieldNow;
       }
-      // Drive a later unrelated title update so we know the stream continued.
       yield* Queue.offer(harness.inputs, titleUpdated("After dropped event", 7));
       const after = yield* awaitThreadState(
         harness.observed,
@@ -1733,19 +1620,14 @@ describe("EnvironmentThreads", () => {
           value.data.value.thread.title === "After dropped event",
       );
 
-      // The dropped event must not have appended the old item.
       expect(Option.getOrThrow(after.data).turnItems.map((item) => String(item.id))).toEqual([
         String(recent.id),
       ]);
-      // Watermark unchanged (only advanced on successful newer turn-item applies).
       expect(after.history.latestLocalTurnOrdinal).toBe(10);
-      // No persistence enqueue from the dropped event itself.
       const savedAfterDrop = (yield* Ref.get(harness.savedThreads)).length;
       expect(savedAfterDrop).toBe(savedBefore);
-      // Seeded projection reference path: event path kept partial meta intact.
       expect(after.history.historyCursor).toBe("partial-cursor");
       expect(after.history.hasMoreHistory).toBe(true);
-      // Title event applied; drop itself did not clear progressive meta.
       expect(seededProjection.turnItems.map((item) => String(item.id))).toEqual([
         String(recent.id),
       ]);
@@ -1881,7 +1763,6 @@ describe("EnvironmentThreads", () => {
       expect(yield* Ref.get(harness.removedThreads)).toEqual([THREAD_ID]);
       expect(yield* Ref.get(harness.subscriptionCount)).toBe(0);
 
-      // A definitive miss must not schedule the expected-failure retry path.
       yield* TestClock.adjust("1 second");
       for (let attempt = 0; attempt < 20; attempt += 1) {
         yield* Effect.yieldNow;
@@ -2158,7 +2039,6 @@ describe("EnvironmentThreads", () => {
         },
         unknown(CACHED_SNAPSHOT_SEQUENCE + 2),
         titleUpdated("After", CACHED_SNAPSHOT_SEQUENCE + 3),
-        // A trailing unknown event must still advance the resume cursor.
         unknown(CACHED_SNAPSHOT_SEQUENCE + 4),
         synchronized(),
       ]);

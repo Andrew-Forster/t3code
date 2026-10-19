@@ -92,18 +92,15 @@ export interface UnsettleThreadInput extends ThreadCommandInput {
 }
 
 export interface PinThreadInput extends ThreadCommandInput {
-  /** Initial slot in the user-arranged pinned order; omit to pin keyless. */
   readonly orderKey?: string;
 }
 export type UnpinThreadInput = ThreadCommandInput;
 
 export interface ReorderPinnedThreadInput extends ThreadCommandInput {
-  /** Fractional-index key that sorts between the drop position's neighbors. */
   readonly orderKey: string;
 }
 
 export interface ReorderActiveThreadInput extends ThreadCommandInput {
-  /** Fractional-index key that sorts between the drop position's neighbors. */
   readonly orderKey: string;
 }
 
@@ -116,7 +113,6 @@ export interface UnsnoozeThreadInput extends ThreadCommandInput {
 }
 
 export interface VisitThreadInput extends ThreadCommandInput {
-  /** Watermark of the thread state the viewer has seen (ISO timestamp). */
   readonly visitedAt: string;
 }
 
@@ -128,11 +124,8 @@ export interface UpdateThreadMetadataInput extends ThreadCommandInput {
   readonly modelSelection?: ModelSelection;
   readonly branch?: string | null;
   readonly worktreePath?: string | null;
-  /** Kick off an async title regeneration for the thread. */
   readonly regenerateTitle?: boolean;
-  /** Link (object) or unlink (null) a pull request (#8160). */
   readonly linkedPullRequest?: ThreadLinkedPullRequest | null;
-  /** Apply only while no message or run has landed on the thread. */
   readonly expectedEmpty?: boolean;
 }
 
@@ -156,7 +149,6 @@ interface StartThreadBootstrap {
     readonly createdAt: string;
   };
   readonly prepareWorktree?: {
-    /** V2 worktree launches always fail rather than falling back to the project checkout. */
     readonly requireWorktree?: boolean;
     readonly projectCwd: string;
     readonly baseBranch: string;
@@ -187,7 +179,6 @@ export interface StartThreadTurnInput extends ThreadCommandInput {
 export interface InterruptThreadTurnInput extends ThreadCommandInput {
   readonly runId?: RunId;
   readonly subagentId?: NodeId;
-  /** Temporary caller compatibility while UI naming moves from turns to runs. */
   readonly turnId?: string;
 }
 
@@ -247,14 +238,11 @@ export interface RetryWorkspacePreparationInput extends ThreadCommandInput {
 }
 
 export interface EditQueuedRunInput extends ThreadCommandInput {
-  readonly editId?: CommandId;
   readonly runId: RunId;
   readonly text: string;
   /**
    * Full replacement attachment list for the queued message. Omitted =
-   * text-only edit that leaves attachments untouched. `dataUrl` entries are
-   * persisted against `messageId` (the queued run's user message) before
-   * dispatch, so `messageId` is required whenever attachments are present.
+   * text-only edit that leaves attachments untouched.
    */
   readonly edit?: {
     readonly messageId: MessageId;
@@ -778,11 +766,6 @@ export const startThreadTurn = Effect.fn("EnvironmentCommands.startThreadTurn")(
   });
 });
 
-/**
- * Stop for the thread's latest work: interrupts the active run, or the settled run whose
- * background work still runs. With no run to stop, it ends the thread's pull request
- * watches, the only background work that has no run.
- */
 export const interruptThreadTurn = Effect.fn("EnvironmentCommands.interruptThreadTurn")(function* (
   input: InterruptThreadTurnInput,
 ) {
@@ -1050,7 +1033,6 @@ export const editQueuedRun = Effect.fn("EnvironmentCommands.editQueuedRun")(func
     threadId: input.threadId,
     runId: input.runId,
     text: input.text,
-    ...(input.editId === undefined ? {} : { editId: input.editId }),
     ...(attachments === undefined ? {} : { attachments }),
     ...(input.edit?.context && attachments
       ? {
@@ -1061,42 +1043,6 @@ export const editQueuedRun = Effect.fn("EnvironmentCommands.editQueuedRun")(func
           ),
         }
       : {}),
-  });
-});
-
-export interface BeginQueuedRunEditInput extends ThreadCommandInput {
-  readonly runId: RunId;
-  readonly previousEditId: CommandId | null;
-}
-
-export interface CancelQueuedRunEditInput extends ThreadCommandInput {
-  readonly runId: RunId;
-  readonly editId: CommandId;
-}
-
-export const beginQueuedRunEdit = Effect.fn("EnvironmentCommands.beginQueuedRunEdit")(function* (
-  input: BeginQueuedRunEditInput,
-) {
-  const commandId = yield* allocateCommandId(input);
-  const { sequence } = yield* dispatch({
-    type: "queued-run.edit.begin",
-    commandId,
-    threadId: input.threadId,
-    runId: input.runId,
-    previousEditId: input.previousEditId,
-  });
-  return { editId: commandId, sequence };
-});
-
-export const cancelQueuedRunEdit = Effect.fn("EnvironmentCommands.cancelQueuedRunEdit")(function* (
-  input: CancelQueuedRunEditInput,
-) {
-  return yield* dispatch({
-    type: "queued-run.edit.cancel",
-    commandId: yield* allocateCommandId(input),
-    threadId: input.threadId,
-    runId: input.runId,
-    editId: input.editId,
   });
 });
 

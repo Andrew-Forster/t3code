@@ -239,7 +239,8 @@ describe("ConnectionResolver", () => {
         environmentId: ENVIRONMENT_ID,
         label: "Primary",
         httpBaseUrl: "http://127.0.0.1:3777",
-        socketUrl: `ws://127.0.0.1:3777/ws?clientSurface=web&clientDeviceType=desktop&connectionMethod=direct&orchestrationProtocol=${ORCHESTRATION_PROTOCOL_VERSION}`,
+        socketUrl:
+          "ws://127.0.0.1:3777/ws?clientSurface=web&clientDeviceType=desktop&connectionMethod=direct&orchestrationProtocol=2",
         httpAuthorization: null,
         target,
       });
@@ -277,7 +278,7 @@ describe("ConnectionResolver", () => {
       });
 
       expect(yield* broker.prepare(catalogEntry(target))).toMatchObject({
-        socketUrl: `ws://127.0.0.1:3777/ws?wsTicket=desktop&orchestrationProtocol=${ORCHESTRATION_PROTOCOL_VERSION}`,
+        socketUrl: "ws://127.0.0.1:3777/ws?wsTicket=desktop&orchestrationProtocol=2",
         httpAuthorization: { _tag: "Bearer", token: "desktop-bearer" },
         target,
       });
@@ -439,6 +440,48 @@ describe("ConnectionResolver", () => {
       ).toContain("wsTicket=bearer");
       expect(yield* Ref.get(preparedTargets)).toEqual([SSH_TARGET]);
       expect(yield* Ref.get(connectionMethods)).toEqual(["ssh"]);
+    }),
+  );
+
+  it.effect("offers the saved SSH token on each connect and saves the one it gets back", () =>
+    Effect.gen(function* () {
+      const offeredTokens = yield* Ref.make<ReadonlyArray<string | undefined>>([]);
+      const target = new SshConnectionTarget({
+        environmentId: ENVIRONMENT_ID,
+        label: "SSH",
+        connectionId: "ssh-1",
+      });
+      const profile = new SshConnectionProfile({
+        connectionId: "ssh-1",
+        environmentId: ENVIRONMENT_ID,
+        label: "SSH",
+        target: SSH_TARGET,
+      });
+      const layerBroker = yield* makeDependencies({
+        credentials: [["ssh-1", new BearerConnectionCredential({ token: "revoked-token" })]],
+        // The host accepts only the token it paired last; anything else pairs again.
+        prepareSsh: (input) =>
+          Ref.update(offeredTokens, (tokens) => [...tokens, input.bearerToken]).pipe(
+            Effect.as({
+              bootstrap: {
+                target: input.target,
+                httpBaseUrl: "http://127.0.0.1:4010",
+                wsBaseUrl: "ws://127.0.0.1:4010",
+                pairingToken: null,
+              },
+              bearerToken: "paired-token",
+            }),
+          ),
+      });
+      const broker = yield* ConnectionResolver.ConnectionResolver.pipe(Effect.provide(layerBroker));
+      const entry = catalogEntry(target, Option.some(profile));
+
+      const first = yield* broker.prepare(entry);
+      const second = yield* broker.prepare(entry);
+
+      expect(yield* Ref.get(offeredTokens)).toEqual(["revoked-token", "paired-token"]);
+      expect(first.httpAuthorization).toMatchObject({ token: "paired-token" });
+      expect(second.httpAuthorization).toMatchObject({ token: "paired-token" });
     }),
   );
 
