@@ -932,6 +932,9 @@ function ThreadRouteContent(
           activeThreadBusy={composer.activeThreadBusy}
           canStopThread={awaitingBootstrapTurn || composer.interruptibleRunId !== null}
           queuedRunEdit={composer.queuedRunEdit}
+          savedQueuedEditDrafts={composer.savedQueuedEditDrafts}
+          recoveryDraftKey={composer.recoveryDraftKey}
+          onSelectRecoveryDraft={composer.selectRecoveryDraft}
           composerDraftKey={composer.composerDraftKey}
           followUpBehavior={composer.followUpBehavior}
           canSteerActiveTurn={composer.canSteerActiveTurn}

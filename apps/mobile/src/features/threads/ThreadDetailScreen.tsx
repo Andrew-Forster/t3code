@@ -1,5 +1,6 @@
 import { settlePromise, squashAtomCommandFailure } from "@t3tools/client-runtime/state/runtime";
 import { AsyncResult } from "effect/reactivity";
+import { Button } from "../../components/ui/Button";
 import * as Dialog from "../../components/ui/Dialog";
 import { useAtomValue } from "@effect/atom-react";
 import { useChildThreadInputs, useThreadReportedModelSelection } from "../../state/entities";
@@ -193,6 +194,9 @@ export interface ThreadDetailScreenProps {
   readonly activeThreadBusy: boolean;
   readonly canStopThread: boolean;
   readonly queuedRunEdit: QueuedRunEdit | null;
+  readonly savedQueuedEditDrafts: ReadonlyArray<string>;
+  readonly recoveryDraftKey: string | null;
+  readonly onSelectRecoveryDraft: (key: string | null) => void;
   readonly composerDraftKey: string | null;
   readonly followUpBehavior: FollowUpBehavior;
   readonly canSteerActiveTurn: boolean;
@@ -1149,6 +1153,29 @@ export const ThreadDetailScreen = function ThreadDetailScreen(props: ThreadDetai
                   }}
                 />
                 <View className="w-full self-center" style={{ maxWidth: contentMaxWidth }}>
+                  {props.savedQueuedEditDrafts.length > 0 ? (
+                    <View className="flex-row flex-wrap gap-2 py-1">
+                      {props.recoveryDraftKey !== null ? (
+                        <Button
+                          label="Main draft"
+                          tone="text"
+                          onPress={() => props.onSelectRecoveryDraft(null)}
+                        />
+                      ) : null}
+                      {props.savedQueuedEditDrafts.map((key, index) => (
+                        <Button
+                          key={key}
+                          label={
+                            props.recoveryDraftKey === key
+                              ? "Recovered queued edit"
+                              : `Saved queued edit ${index + 1}`
+                          }
+                          tone="text"
+                          onPress={() => props.onSelectRecoveryDraft(key)}
+                        />
+                      ))}
+                    </View>
+                  ) : null}
                   {props.queuedRunEdit !== null ? (
                     <Animated.View
                       className="shrink-0"

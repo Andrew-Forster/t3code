@@ -93,9 +93,15 @@ import { settlePromise, squashAtomCommandFailure } from "@t3tools/client-runtime
 import { prepareTurnAttachments } from "../lib/attachmentUpload";
 import { DEFAULT_FOLLOW_UP_BEHAVIOR } from "../lib/followUpBehavior";
 import { mobilePreferencesAtom } from "./preferences";
-import { environmentThreadDetails } from "./threads";
+import { queuedRunEditOwnership } from "@t3tools/client-runtime/state/threads";
+import { environmentThreadDetails, useEnvironmentThread } from "./threads";
 import {
   endQueuedRunEdit,
+  recoverQueuedRunEdit,
+  useSavedQueuedEditDrafts,
+  useQueuedEditRecovery,
+  selectQueuedEditRecovery,
+  getQueuedEditRecovery,
   getQueuedRunEdit,
   queuedEditDraftKey,
   removeQueuedRunEditAttachment,
@@ -157,7 +163,9 @@ function activeComposerDraftKey(thread: {
 }): string {
   const threadKey = scopedThreadKey(thread.environmentId, thread.id);
   const edit = getQueuedRunEdit(threadKey);
-  return edit === null ? threadKey : queuedEditDraftKey(threadKey, edit.runId);
+  return edit === null
+    ? (getQueuedEditRecovery(threadKey) ?? threadKey)
+    : queuedEditDraftKey(threadKey, edit.runId);
 }
 
 export function useThreadDraftForThread(input: {
@@ -198,6 +206,13 @@ export function useThreadComposerState() {
     label: "edit queued message",
     reportFailure: false,
   });
+  const releaseQueuedEdit = useAtomCommand(threadEnvironment.cancelQueuedRunEdit, {
+    reportFailure: false,
+  });
+  const editThreadState = useEnvironmentThread(
+    selectedThreadShell?.environmentId ?? null,
+    selectedThreadShell?.id ?? null,
+  );
   const [isSavingQueuedEdit, setIsSavingQueuedEdit] = useState(false);
   const savingQueuedEditRef = useRef(false);
   const pastedTextFileNamesRef = useRef<{ threadKey: string | null; names: Set<string> }>({
@@ -288,12 +303,14 @@ export function useThreadComposerState() {
       : environmentThreadDetails.queueWorkflowAtom(selectedThreadDetailRef),
   );
   const queuedRunEdit = useQueuedRunEdit(selectedThreadKey);
+  const savedQueuedEditDrafts = useSavedQueuedEditDrafts(selectedThreadKey);
+  const selectedRecoveryDraftKey = useQueuedEditRecovery(selectedThreadKey);
   const composerDraftKey =
     selectedThreadKey === null
       ? null
-      : queuedRunEdit === null
-        ? selectedThreadKey
-        : queuedEditDraftKey(selectedThreadKey, queuedRunEdit.runId);
+      : queuedRunEdit !== null
+        ? queuedEditDraftKey(selectedThreadKey, queuedRunEdit.runId)
+        : (selectedRecoveryDraftKey ?? selectedThreadKey);
   const selectedDraft = useComposerDraftSettings(selectedThreadKey);
   const selectedThreadQueueCount = selectedThreadQueuedMessages.length;
   const selectedThread = selectedThreadShell;
@@ -372,48 +389,43 @@ export function useThreadComposerState() {
     ? deriveProviderSubagentStatus(selectedThreadProjection.projection)
     : null;
 
-  const selectedThreadRuns = selectedThreadProjection?.projection.runs;
-  const editedRunId = queuedRunEdit?.runId ?? null;
   useEffect(() => {
-    if (selectedThreadKey === null || editedRunId === null || selectedThreadRuns === undefined) {
+    if (
+      selectedThreadKey === null ||
+      queuedRunEdit === null ||
+      savingQueuedEditRef.current ||
+      isSavingQueuedEdit
+    )
       return;
-    }
-    if (savingQueuedEditRef.current) return;
-    const stillQueued = selectedThreadRuns.some(
-      (run) => run.id === editedRunId && run.status === "queued",
-    );
-    if (stillQueued) return;
-    const editDraftKey = queuedEditDraftKey(selectedThreadKey, editedRunId);
-    const editDraft = getComposerDraftSnapshot(editDraftKey);
-    const threadDraft = getComposerDraftSnapshot(selectedThreadKey);
-    const keepable =
-      editDraft.text.trim().length > 0 &&
-      threadDraft.text.trim().length === 0 &&
-      threadDraft.attachments.length === 0;
-    if (keepable) {
-      void mergeComposerDraftContent(selectedThreadKey, {
-        text: editDraft.text,
-        attachments: editDraft.attachments,
-        ...(editDraft.context ? { context: editDraft.context } : {}),
-      });
-    }
-    endQueuedRunEdit(selectedThreadKey, { deferAttachmentCleanup: keepable });
+    if (queuedRunEditOwnership(editThreadState, queuedRunEdit) !== "lost") return;
+    const dirty = recoverQueuedRunEdit(selectedThreadKey);
     setThreadComposerError(
       selectedThreadKey,
-      keepable
-        ? "That message already started. Your edit is back in the composer."
-        : "That message already started, so the edit was discarded.",
+      dirty
+        ? "Editing ended. Open Saved queued edit above the composer to recover your changes."
+        : "The message left the queue or another editor took over.",
     );
-  }, [editedRunId, selectedThreadKey, selectedThreadRuns]);
+  }, [selectedThreadKey, queuedRunEdit, editThreadState, isSavingQueuedEdit]);
 
   const activeThreadBusy = threadRuntimeIsActive(selectedThreadRuntime);
   const interruptibleRunId = threadRuntimeHasInterruptibleRun(selectedThreadRuntime)
     ? (selectedThreadRuntime?.activeRunId ?? null)
     : null;
 
-  const cancelQueuedRunEdit = () => {
-    if (selectedThreadKey === null || savingQueuedEditRef.current) return;
-    endQueuedRunEdit(selectedThreadKey);
+  const cancelQueuedRunEdit = async () => {
+    if (selectedThreadKey === null || selectedThreadShell === null || savingQueuedEditRef.current)
+      return;
+    const edit = getQueuedRunEdit(selectedThreadKey);
+    if (edit === null) return;
+    savingQueuedEditRef.current = true;
+    setIsSavingQueuedEdit(true);
+    const result = await releaseQueuedEdit({
+      environmentId: selectedThreadShell.environmentId,
+      input: { threadId: selectedThreadShell.id, runId: edit.runId, editId: edit.editId },
+    });
+    savingQueuedEditRef.current = false;
+    setIsSavingQueuedEdit(false);
+    if (result._tag === "Success") endQueuedRunEdit(selectedThreadKey);
   };
 
   const onRemoveQueuedEditAttachment = (attachmentId: string) => {
@@ -480,6 +492,7 @@ export function useThreadComposerState() {
       input: {
         threadId: thread.id,
         runId: edit.runId,
+        editId: edit.editId,
         text,
         edit: {
           messageId: edit.messageId,
@@ -525,8 +538,9 @@ export function useThreadComposerState() {
     }
 
     const threadKey = scopedThreadKey(selectedThreadShell.environmentId, selectedThreadShell.id);
-    const draft = getComposerDraftSnapshot(threadKey);
-    if (appAtomRegistry.get(composerContextImportsAtom)[threadKey]) return null;
+    const draftKey = activeComposerDraftKey(selectedThreadShell);
+    const draft = getComposerDraftSnapshot(draftKey);
+    if (appAtomRegistry.get(composerContextImportsAtom)[draftKey]) return null;
     const thread = selectedThreadShell;
     const text = draft.text.trim();
     const attachments = draft.attachments;
@@ -596,7 +610,7 @@ export function useThreadComposerState() {
           command: text,
           createdAt: metadata.createdAt,
         },
-        clearDraft: () => clearComposerDraftContent(threadKey),
+        clearDraft: () => clearComposerDraftContent(draftKey),
         onUpdate: (submission) => {
           setFeedbackSubmissionsByThreadKey((current) => {
             const existing = current[threadKey] ?? [];
@@ -659,7 +673,7 @@ export function useThreadComposerState() {
       ...(followUpDispatchMode === null ? {} : { dispatchMode: followUpDispatchMode }),
       createdAt: metadata.createdAt,
     });
-    clearComposerDraftContent(threadKey, { deferAttachmentCleanup: true });
+    clearComposerDraftContent(draftKey, { deferAttachmentCleanup: true });
     enqueuePromise.then(
       () => scheduleUnusedComposerAttachmentCleanup(attachments),
       (error: unknown) => {
@@ -667,12 +681,12 @@ export function useThreadComposerState() {
         // append: the merge path slots existing attachments first and truncates
         // at the send limit, which would silently drop this message's images if
         // the user attached new ones while the write was in flight.
-        void mergeComposerDraftContent(threadKey, {
+        void mergeComposerDraftContent(draftKey, {
           text,
           context: draft.context,
           attachments: [],
         });
-        appendComposerDraftAttachments(threadKey, attachments, { allowOverflow: true });
+        appendComposerDraftAttachments(draftKey, attachments, { allowOverflow: true });
         setThreadComposerError(
           threadKey,
           error instanceof Error ? error.message : "Failed to save the queued message.",
@@ -967,6 +981,11 @@ export function useThreadComposerState() {
     followUpBehavior,
     canSteerActiveTurn,
     queuedRunEdit,
+    savedQueuedEditDrafts: queuedRunEdit === null ? savedQueuedEditDrafts : [],
+    recoveryDraftKey: selectedRecoveryDraftKey,
+    selectRecoveryDraft: (key: string | null) => {
+      if (selectedThreadKey !== null) selectQueuedEditRecovery(selectedThreadKey, key);
+    },
     isSavingQueuedEdit,
     cancelQueuedRunEdit,
     onRemoveQueuedEditAttachment,

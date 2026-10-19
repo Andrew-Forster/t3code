@@ -1,6 +1,9 @@
-import { describe, expect, it } from "vite-plus/test";
+import { describe, expect, it, vi } from "vite-plus/test";
+vi.mock("../lib/uuid", () => ({ uuidv4: () => "saved-edit" }));
 import {
   ChatAttachmentId,
+  CommandId,
+  EnvironmentId,
   ComposerContextId,
   MessageId,
   RunId,
@@ -10,7 +13,23 @@ import {
 
 import { composerDraftEnvironmentId } from "../lib/composerAttachmentUploadQueue";
 import { isQueuedEditDraftKey, queuedEditDraftKey } from "./queued-edit-draft-key";
-import { resolveQueuedEditPayload, type QueuedRunEdit } from "./queued-run-edit";
+import {
+  beginQueuedRunEdit,
+  recoverQueuedRunEdit,
+  getQueuedRunEdit,
+  forgetQueuedRunEdit,
+  endQueuedRunEdit,
+  resolveQueuedEditPayload,
+  type QueuedRunEdit,
+} from "./queued-run-edit";
+import { appAtomRegistry } from "./atom-registry";
+import {
+  composerDraftsAtom,
+  decodePersistedComposerState,
+  getComposerDraftSnapshot,
+  replaceComposerDraftAttachments,
+  setComposerDraftText,
+} from "./use-composer-drafts";
 
 const image = (id: string): ChatAttachment => ({
   type: "image",
@@ -22,6 +41,8 @@ const image = (id: string): ChatAttachment => ({
 
 function edit(attachments: ReadonlyArray<ChatAttachment>): QueuedRunEdit {
   return {
+    editId: CommandId.make("edit-1"),
+    sequence: 1,
     runId: RunId.make("run-1"),
     messageId: MessageId.make("message-1"),
     originalText: "original",
@@ -56,6 +77,157 @@ describe("queued edit draft key", () => {
 });
 
 describe("resolveQueuedEditPayload", () => {
+  it("restores owned edits after persisted draft hydration and across thread navigation", () => {
+    vi.useFakeTimers();
+    try {
+      const first = "env:thread-reload";
+      const second = "env:other-thread";
+      appAtomRegistry.set(composerDraftsAtom, {});
+      beginQueuedRunEdit(first, edit([]), []);
+      setComposerDraftText(queuedEditDraftKey(first, "run-1"), "");
+      beginQueuedRunEdit(second, { ...edit([]), editId: CommandId.make("edit-2") }, []);
+      const restored = decodePersistedComposerState(
+        JSON.parse(
+          JSON.stringify({ schemaVersion: 1, drafts: appAtomRegistry.get(composerDraftsAtom) }),
+        ),
+      );
+      appAtomRegistry.set(composerDraftsAtom, {});
+      expect(getQueuedRunEdit(first)).toBeNull();
+      appAtomRegistry.set(composerDraftsAtom, restored.drafts);
+      expect(getQueuedRunEdit(first)?.editId).toBe("edit-1");
+      expect(getQueuedRunEdit(second)?.editId).toBe("edit-2");
+      expect(getComposerDraftSnapshot(queuedEditDraftKey(first, "run-1")).text).toBe("");
+      endQueuedRunEdit(first);
+      expect(getQueuedRunEdit(first)).toBeNull();
+      expect(getQueuedRunEdit(second)?.editId).toBe("edit-2");
+    } finally {
+      appAtomRegistry.set(composerDraftsAtom, {});
+      vi.clearAllTimers();
+      vi.useRealTimers();
+    }
+  });
+
+  it.each(["text", "attachments"])(
+    "keeps a retained edit separate from newer server %s",
+    (change) => {
+      vi.useFakeTimers();
+      try {
+        const threadKey = "env:stale-thread";
+        const draftKey = queuedEditDraftKey(threadKey, "run-1");
+        appAtomRegistry.set(composerDraftsAtom, {});
+        beginQueuedRunEdit(threadKey, edit([]), []);
+        setComposerDraftText(draftKey, "My older edit");
+        forgetQueuedRunEdit(threadKey);
+        beginQueuedRunEdit(threadKey, edit([]), []);
+        expect(getComposerDraftSnapshot(draftKey).text).toBe("My older edit");
+        forgetQueuedRunEdit(threadKey);
+        const newer = {
+          ...edit(change === "attachments" ? [image("new")] : []),
+          originalText: change === "text" ? "New server text" : "original",
+        };
+        beginQueuedRunEdit(
+          threadKey,
+          newer,
+          change === "attachments"
+            ? [
+                {
+                  type: "image",
+                  id: "new",
+                  name: "new.png",
+                  mimeType: "image/png",
+                  sizeBytes: 10,
+                  previewUri: "data:image/png;base64,YWJj",
+                  dataUrl: "data:image/png;base64,YWJj",
+                },
+              ]
+            : [],
+        );
+        expect(getComposerDraftSnapshot(draftKey).text).toBe(newer.originalText);
+        expect(
+          getComposerDraftSnapshot(draftKey).attachments.map((attachment) => attachment.id),
+        ).toEqual(change === "attachments" ? ["new"] : []);
+        const retained = Object.entries(appAtomRegistry.get(composerDraftsAtom)).find(([key]) =>
+          key.startsWith(`${draftKey}~saved~`),
+        )?.[1];
+        expect(retained?.text).toBe("My older edit");
+        expect(retained?.queuedEdit?.ownership).toBeUndefined();
+      } finally {
+        appAtomRegistry.set(composerDraftsAtom, {});
+        vi.clearAllTimers();
+        vi.useRealTimers();
+      }
+    },
+  );
+
+  it.each(["attachment removal", "text edit"])(
+    "recovers the selected attachments after %s and restart beside an occupied main draft",
+    (change) => {
+      vi.useFakeTimers();
+      try {
+        const threadKey = "env:thread";
+        const editing = edit([image("first"), image("second")]);
+        const draftKey = queuedEditDraftKey(threadKey, editing.runId);
+        const main = { text: "Unrelated draft", attachments: [] };
+        appAtomRegistry.set(composerDraftsAtom, { [threadKey]: main });
+        beginQueuedRunEdit(
+          threadKey,
+          editing,
+          editing.existingAttachments.map((attachment) => ({
+            type: "image" as const,
+            id: attachment.id,
+            name: attachment.name,
+            mimeType: attachment.mimeType,
+            sizeBytes: attachment.sizeBytes,
+            previewUri: "data:image/png;base64,YWJj",
+            dataUrl: "data:image/png;base64,YWJj",
+            uploadedAttachmentId: attachment.id,
+            uploadEnvironmentId: EnvironmentId.make("env"),
+            source: {
+              kind: "snap-shot" as const,
+              capturedAt: "2026-10-19T00:00:00.000Z",
+              appName: "Browser",
+              windowTitle: "Test",
+            },
+          })),
+        );
+        if (change === "attachment removal") {
+          replaceComposerDraftAttachments(
+            draftKey,
+            getComposerDraftSnapshot(draftKey).attachments.filter(
+              (attachment) => attachment.id !== "first",
+            ),
+          );
+          expect(getComposerDraftSnapshot(draftKey).text).toBe(editing.originalText);
+        } else setComposerDraftText(draftKey, "edited");
+        expect(recoverQueuedRunEdit(threadKey)).toBe(true);
+        expect(getQueuedRunEdit(threadKey)).toBeNull();
+        const restored = decodePersistedComposerState(
+          JSON.parse(
+            JSON.stringify({ schemaVersion: 1, drafts: appAtomRegistry.get(composerDraftsAtom) }),
+          ),
+        );
+        expect(restored.drafts[threadKey]).toEqual(main);
+        expect(restored.drafts[draftKey]?.attachments.map((attachment) => attachment.id)).toEqual(
+          change === "attachment removal" ? ["second"] : ["first", "second"],
+        );
+        expect(restored.drafts[draftKey]?.attachments).toEqual(
+          expect.arrayContaining([
+            expect.objectContaining({
+              id: "second",
+              uploadedAttachmentId: "second",
+              uploadEnvironmentId: "env",
+              source: expect.objectContaining({ kind: "snap-shot" }),
+            }),
+          ]),
+        );
+      } finally {
+        appAtomRegistry.set(composerDraftsAtom, {});
+        vi.clearAllTimers();
+        vi.useRealTimers();
+      }
+    },
+  );
+
   it("resends the kept server attachments ahead of the newly uploaded ones", () => {
     const payload = resolveQueuedEditPayload({
       edit: edit([image("kept")]),
