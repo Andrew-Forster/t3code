@@ -1,8 +1,8 @@
+import type { ThreadStructure } from "@t3tools/client-runtime/state/shell";
 import {
   PROVIDER_SEND_TURN_MAX_ATTACHMENTS,
   type CommandId,
   type EnvironmentId,
-  type OrchestrationV2ThreadProjection,
   type PreviewAnnotationPayload,
   type ScopedThreadRef,
   type ThreadContextRecord,
@@ -146,7 +146,7 @@ export function useQueuedRunEdit(input: {
   readonly threadDraftTarget: ComposerThreadTarget;
   // Null while the route has no thread yet; an edit needs one to target.
   readonly activeThreadId: ThreadId | null;
-  readonly serverProjection: OrchestrationV2ThreadProjection | null;
+  readonly serverProjection: ThreadStructure | null;
   readonly promptRef: { current: string };
   readonly composerRef: RefObject<ChatComposerHandle | null>;
 }) {
@@ -211,99 +211,112 @@ export function useQueuedRunEdit(input: {
   const beginEdit = useStableCallback(async (request: EditQueuedRunRequest) => {
     if (activeThreadId === null || beginInFlight.current || saveInFlightRef.current) return;
     beginInFlight.current = true;
-    try {
-      const run = serverProjection?.runs.find((run) => run.id === request.runId);
-      const previousEditId = run?.queueEditId ?? null;
-      if (editing?.runId === request.runId && editing.editId === previousEditId) {
-        focusComposerSoon();
-        return;
-      }
-      if (previousEditId !== null) {
-        const confirmed = await readLocalApi()?.dialogs.confirm(
-          "This message is being edited elsewhere. Take over editing? The other editor will keep their unsaved changes.",
-        );
-        if (!confirmed) return;
-      }
-      if (editing !== null) {
-        const released = await releaseEdit({
-          environmentId,
-          input: { threadId: editing.threadId, runId: editing.runId, editId: editing.editId },
-        });
-        if (released._tag !== "Success") return;
-        recoverQueuedMessageEdit({
-          editTarget: queuedEditDraftTarget(routeThreadRef, editing.runId),
-          threadTarget: threadDraftTarget,
-          originalText: editing.originalText,
-          originalAttachmentIds: editing.originalAttachmentIds,
-        });
-      }
-      const acquired = await acquireEdit({
-        environmentId,
-        input: { threadId: activeThreadId, runId: request.runId, previousEditId },
-      });
-      if (acquired._tag !== "Success") return;
-      const target = queuedEditDraftTarget(routeThreadRef, request.runId);
-      const preparation = prepareQueuedMessageEditDraft({
-        editTarget: target,
-        edit: {
-          ...acquired.value,
-          runId: request.runId,
-          messageId: request.messageId,
-          context: serverProjection?.messages.find((message) => message.id === request.messageId)
-            ?.context,
-        },
-        environmentId,
-        text: request.text,
-        attachments: request.attachments,
-        readImage: async (attachment) => {
-          const connection = readPreparedConnection(environmentId);
-          if (!connection) throw new Error("Reconnect before editing attachments.");
-          const result = await executeAtomQuery(
-            appAtomRegistry,
-            assetEnvironment.createUrl({
-              environmentId,
-              input: { resource: { _tag: "attachment", attachmentId: attachment.id } },
-            }),
-            { refresh: true, reportFailure: false },
-          );
-          if (result._tag === "Failure") throw squashAtomCommandFailure(result);
-          const url = resolveAssetUrl(connection.httpBaseUrl, result.value.relativeUrl);
-          if (url === null) throw new Error("Attachment URL unavailable.");
-          const response = await fetch(url, { signal: AbortSignal.timeout(30_000) });
-          if (!response.ok) throw new Error(`Could not restore attachment: ${attachment.name}`);
-          const file = new File([await response.blob()], attachment.name, {
-            type: attachment.mimeType,
-          });
-          return { file, dataUrl: await readFileAsDataUrl(file) };
-        },
-      });
-      const preparedEdit = useComposerDraftStore.getState().getComposerDraft(target)?.queuedEdit;
+    const openEdit = async () => {
       try {
-        await preparation;
-      } catch (error) {
-        const released = await releaseFailedPreparation({
-          environmentId,
-          input: { threadId: activeThreadId, runId: request.runId, editId: acquired.value.editId },
-        });
-        if (released._tag === "Success" && preparedEdit?.ownership)
-          recoverQueuedMessageEdit({
-            editTarget: target,
-            threadTarget: threadDraftTarget,
-            originalText: preparedEdit.originalText,
-            originalAttachmentIds: preparedEdit.originalAttachmentIds,
-            expectedEdit: preparedEdit,
+        const run = serverProjection?.runs.find((run) => run.id === request.runId);
+        const previousEditId = run?.queueEditId ?? null;
+        if (editing?.runId === request.runId && editing.editId === previousEditId) {
+          focusComposerSoon();
+          return;
+        }
+        if (previousEditId !== null) {
+          const confirmed = await readLocalApi()?.dialogs.confirm(
+            "This message is being edited elsewhere. Take over editing? The other editor will keep their unsaved changes.",
+          );
+          if (!confirmed) return;
+        }
+        if (editing !== null) {
+          const released = await releaseEdit({
+            environmentId,
+            input: { threadId: editing.threadId, runId: editing.runId, editId: editing.editId },
           });
+          if (released._tag !== "Success") return;
+          recoverQueuedMessageEdit({
+            editTarget: queuedEditDraftTarget(routeThreadRef, editing.runId),
+            threadTarget: threadDraftTarget,
+            originalText: editing.originalText,
+            originalAttachmentIds: editing.originalAttachmentIds,
+          });
+        }
+        const acquired = await acquireEdit({
+          environmentId,
+          input: { threadId: activeThreadId, runId: request.runId, previousEditId },
+        });
+        if (acquired._tag !== "Success") return;
+        const target = queuedEditDraftTarget(routeThreadRef, request.runId);
+        const preparation = prepareQueuedMessageEditDraft({
+          editTarget: target,
+          edit: {
+            ...acquired.value,
+            runId: request.runId,
+            messageId: request.messageId,
+            context: serverProjection?.messages.find((message) => message.id === request.messageId)
+              ?.context,
+          },
+          environmentId,
+          text: request.text,
+          attachments: request.attachments,
+          readImage: async (attachment) => {
+            const connection = readPreparedConnection(environmentId);
+            if (!connection) throw new Error("Reconnect before editing attachments.");
+            const result = await executeAtomQuery(
+              appAtomRegistry,
+              assetEnvironment.createUrl({
+                environmentId,
+                input: { resource: { _tag: "attachment", attachmentId: attachment.id } },
+              }),
+              { refresh: true, reportFailure: false },
+            );
+            if (result._tag === "Failure") throw squashAtomCommandFailure(result);
+            const url = resolveAssetUrl(connection.httpBaseUrl, result.value.relativeUrl);
+            if (url === null) throw new Error("Attachment URL unavailable.");
+            const response = await fetch(url, { signal: AbortSignal.timeout(30_000) });
+            if (!response.ok) throw new Error(`Could not restore attachment: ${attachment.name}`);
+            const file = new File([await response.blob()], attachment.name, {
+              type: attachment.mimeType,
+            });
+            return { file, dataUrl: await readFileAsDataUrl(file) };
+          },
+        });
+        const preparedEdit = useComposerDraftStore.getState().getComposerDraft(target)?.queuedEdit;
+        try {
+          await preparation;
+        } catch (error) {
+          const released = await releaseFailedPreparation({
+            environmentId,
+            input: {
+              threadId: activeThreadId,
+              runId: request.runId,
+              editId: acquired.value.editId,
+            },
+          });
+          if (released._tag === "Success" && preparedEdit?.ownership)
+            recoverQueuedMessageEdit({
+              editTarget: target,
+              threadTarget: threadDraftTarget,
+              originalText: preparedEdit.originalText,
+              originalAttachmentIds: preparedEdit.originalAttachmentIds,
+              expectedEdit: preparedEdit,
+            });
+          toastManager.add({
+            type: "error",
+            title: "Could not open queued edit",
+            description: error instanceof Error ? error.message : "Could not restore attachments.",
+          });
+          return;
+        }
+        focusComposerSoon();
+      } catch (error) {
         toastManager.add({
           type: "error",
           title: "Could not open queued edit",
-          description: error instanceof Error ? error.message : "Could not restore attachments.",
+          description: error instanceof Error ? error.message : "Please try again.",
         });
-        return;
       }
-      focusComposerSoon();
-    } finally {
+    };
+    await openEdit().finally(() => {
       beginInFlight.current = false;
-    }
+    });
   });
   const cancelEdit = useStableCallback(async () => {
     if (editing === null || saveInFlightRef.current) return;

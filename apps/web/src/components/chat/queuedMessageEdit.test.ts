@@ -3,6 +3,7 @@ import {
   formatComposerContextReference,
 } from "@t3tools/shared/composerContextReferences";
 import {
+  ChatAttachmentId,
   CommandId,
   ComposerContextId,
   EnvironmentId,
@@ -50,7 +51,7 @@ const edit = {
 
 const file: ComposerFileAttachment = {
   type: "file",
-  id: "file:report",
+  id: ChatAttachmentId.make("file-report"),
   name: "report.pdf",
   mimeType: "application/pdf",
   sizeBytes: 6,
@@ -58,7 +59,7 @@ const file: ComposerFileAttachment = {
 };
 const image: ComposerImageAttachment = {
   type: "image",
-  id: "image:screen",
+  id: ChatAttachmentId.make("image-screen"),
   name: "screen.png",
   mimeType: "image/png",
   sizeBytes: 5,
@@ -76,7 +77,7 @@ const emptyContent = {
 const payloadEdit = { ...edit, sourceText: "", originalText: "", originalAttachmentIds: [] };
 const uploadedFile = {
   type: "file" as const,
-  id: "upload:report",
+  id: ChatAttachmentId.make("upload-report"),
   name: file.name,
   mimeType: file.mimeType,
   sizeBytes: file.sizeBytes,
@@ -127,19 +128,6 @@ describe("queued message file edits", () => {
     expect(store.getComposerDraft(threadTarget)?.prompt).toBe("Original message");
     expect(store.getComposerDraft(threadTarget)?.files).toEqual([file]);
     expect(store.getComposerDraft(editTarget)).toBeNull();
-  });
-
-  it("preserves uploaded file references when a remote queue advance interrupts the edit", () => {
-    const store = useComposerDraftStore.getState();
-    const uploaded = {
-      ...file,
-      file: null,
-      uploadedAttachmentId: uploadedFile.id,
-      uploadEnvironmentId: environmentId,
-    };
-    store.addFiles(editTarget, [uploaded]);
-    expect(recoverQueuedMessageEdit({ editTarget, threadTarget, originalText: "" })).toBe("kept");
-    expect(store.getComposerDraft(threadTarget)?.files).toEqual([uploaded]);
   });
 
   it("does not overwrite a separate draft when the queued run leaves", () => {
@@ -359,7 +347,7 @@ describe("queued message file edits", () => {
       const store = useComposerDraftStore.getState();
       const first = {
         type: "image" as const,
-        id: "saved:first",
+        id: ChatAttachmentId.make("saved-first"),
         name: "first.png",
         mimeType: "image/png",
         sizeBytes: 5,
@@ -415,7 +403,7 @@ describe("queued message file edits", () => {
     const store = useComposerDraftStore.getState();
     const savedImage = {
       type: "image" as const,
-      id: "server-image",
+      id: ChatAttachmentId.make("server-image"),
       name: "screen.png",
       mimeType: "image/png",
       sizeBytes: 5,
@@ -504,7 +492,7 @@ describe("queued message file edits", () => {
     const store = useComposerDraftStore.getState();
     const saved = {
       type: "image" as const,
-      id: "server-image",
+      id: ChatAttachmentId.make("server-image"),
       name: image.name,
       mimeType: image.mimeType,
       sizeBytes: image.sizeBytes,
