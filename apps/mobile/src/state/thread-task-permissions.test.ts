@@ -74,6 +74,7 @@ vi.mock("../lib/attachmentUpload", () => ({ prepareTurnAttachments: vi.fn() }));
 vi.mock("../lib/uuid", () => ({ uuidv4: () => "uuid" }));
 vi.mock("./queued-run-edit", () => ({
   useQueuedRunEdit: () => null,
+  useQueuedRunEditSaving: () => false,
   getQueuedRunEdit: () => null,
   useSavedQueuedEditDrafts: () => [],
   useQueuedEditRecovery: () => null,

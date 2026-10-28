@@ -389,6 +389,7 @@ export function useQueuedRunEdit(input: {
     clearEditDraft(editing.runId);
     focusComposerSoon();
   });
+  // oxlint-disable-next-line t3code/no-unreasoned-state-sync -- keeps the edit projection watch and recovery toast in sync with server ownership after navigation
   useEffect(() => {
     if (editing === null || activeThreadId !== editing.threadId || isSaving) return;
     watchQueuedEdit(routeThreadRef, threadDraftTarget, editing);

@@ -9394,11 +9394,13 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
         cause: "A guest's message cannot be edited. Cancel it instead.",
       });
     }
-    yield* ensureGoalCommandSupported(
-      command,
-      { text: command.text, attachments: command.attachments ?? queuedMessage.attachments },
-      queuedRun.providerInstanceId,
-    );
+    if (command.type === "queued-run.edit") {
+      yield* ensureGoalCommandSupported(
+        command,
+        { text: command.text, attachments: command.attachments ?? queuedMessage.attachments },
+        queuedRun.providerInstanceId,
+      );
+    }
     const queuedTurnItem = projection.turnItems.find(
       (candidate) => candidate.type === "user_message" && candidate.messageId === queuedMessage.id,
     );
