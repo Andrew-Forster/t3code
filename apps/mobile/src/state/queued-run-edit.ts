@@ -13,13 +13,19 @@ import type {
   RunId,
   UploadChatAttachment,
 } from "@t3tools/contracts";
-import { Atom } from "effect/reactivity";
 import { useAtomValue } from "@effect/atom-react";
+import { Atom } from "effect/reactivity";
+import {
+  makeQueuedRunEditStore,
+  type QueuedRunsAtom,
+} from "@t3tools/client-runtime/queued-run-edit";
 
 import { uploadedComposerContext } from "../lib/composerContext";
 import type { DraftComposerAttachment } from "../lib/composerImages";
 import { appAtomRegistry } from "./atom-registry";
+import { abortComposerDraftOperations } from "./composerDraftOperations";
 import { queuedEditDraftKey } from "./queued-edit-draft-key";
+import { setThreadComposerError } from "./thread-composer-error";
 import {
   clearComposerDraft,
   updateComposerDrafts,
@@ -42,6 +48,41 @@ export interface QueuedRunEdit {
 }
 
 export { queuedEditDraftKey } from "./queued-edit-draft-key";
+
+const queuedRunEdits = makeQueuedRunEditStore<QueuedRunEditDraft & { readonly runId: RunId }>({
+  registry: appAtomRegistry,
+  label: "mobile-queued-run-edits",
+});
+
+export function watchQueuedRunEdit(threadKey: string, runs: QueuedRunsAtom): void {
+  const draft = activeEditDraft(appAtomRegistry.get(composerDraftsAtom), threadKey);
+  if (!draft?.ownership || queuedRunEdits.get(threadKey)?.ownership === draft.ownership) return;
+  queuedRunEdits.begin(threadKey, draft, {
+    runs,
+    onRunLeftQueue: (_, endedEdit) => {
+      const dirty = recoverQueuedRunEdit(threadKey, endedEdit);
+      setThreadComposerError(
+        threadKey,
+        dirty
+          ? "Editing ended. Open Saved queued edit above the composer to recover your changes."
+          : "The message left the queue or another editor took over.",
+      );
+    },
+  });
+}
+
+export function activeComposerDraftKey(
+  threadKey: string,
+  requestedKey: string,
+  edit: QueuedRunEdit | null,
+): string {
+  if (requestedKey === threadKey) return threadKey;
+  return edit !== null && queuedEditDraftKey(threadKey, edit.runId) === requestedKey
+    ? requestedKey
+    : getQueuedEditRecovery(threadKey) === requestedKey
+      ? requestedKey
+      : threadKey;
+}
 
 const queuedEditRecoverySelectionAtom = Atom.make<Readonly<Record<string, string>>>({}).pipe(
   Atom.keepAlive,
@@ -116,7 +157,13 @@ export function useQueuedRunEdit(threadKey: string | null): QueuedRunEdit | null
   return useMemo(() => editFromDraft(draft), [draft]);
 }
 
+export function useQueuedRunEditSaving(threadKey: string | null): boolean {
+  const saving = useAtomValue(queuedRunEdits.savingAtom);
+  return threadKey !== null && saving[threadKey] === true;
+}
+
 export function forgetQueuedRunEdit(threadKey: string): void {
+  queuedRunEdits.end(threadKey);
   updateComposerDrafts((current) => {
     const next = { ...current };
     for (const [key, draft] of Object.entries(current)) {
@@ -148,6 +195,7 @@ export function beginQueuedRunEdit(
   edit: QueuedRunEdit,
   attachments: ReadonlyArray<DraftComposerAttachment>,
 ): void {
+  abortComposerDraftOperations(threadKey);
   const previous = getQueuedRunEdit(threadKey);
   if (previous !== null && previous.runId !== edit.runId) {
     forgetQueuedRunEdit(threadKey);
@@ -252,7 +300,14 @@ export function endQueuedRunEdit(
   const edit = getQueuedRunEdit(threadKey);
   if (edit === null) return;
   clearComposerDraft(queuedEditDraftKey(threadKey, edit.runId), options);
+  queuedRunEdits.end(threadKey);
 }
+
+/**
+ * Claims the open edit for a save; while it runs, the save's result decides the
+ * edit's fate. Null when there is no edit or a save is already in flight.
+ */
+export const startQueuedRunEditSave = queuedRunEdits.startSave;
 
 /** Attachments replace wholesale; resend kept server attachments with uploads in composer order. */
 export function resolveQueuedEditPayload(input: {

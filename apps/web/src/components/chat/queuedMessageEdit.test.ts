@@ -73,6 +73,7 @@ const emptyContent = {
   reviewComments: [],
   previewAnnotations: [],
   threadContexts: [],
+  environmentContexts: [],
 };
 const payloadEdit = { ...edit, sourceText: "", originalText: "", originalAttachmentIds: [] };
 const uploadedFile = {

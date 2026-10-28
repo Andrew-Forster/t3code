@@ -8,6 +8,7 @@ import { Atom } from "effect/reactivity";
 import {
   PROVIDER_SEND_TURN_MAX_ATTACHMENTS,
   type CommandId,
+  type EnvironmentContextRecord,
   type EnvironmentId,
   type PreviewAnnotationPayload,
   type ScopedThreadRef,
@@ -111,6 +112,7 @@ export interface QueuedRunEditContent {
   readonly reviewComments: ReadonlyArray<ReviewCommentContext>;
   readonly previewAnnotations: ReadonlyArray<PreviewAnnotationPayload>;
   readonly threadContexts: ReadonlyArray<ThreadContextRecord>;
+  readonly environmentContexts: ReadonlyArray<EnvironmentContextRecord>;
 }
 
 /** Draft id for editing a queued run of the route thread. */

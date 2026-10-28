@@ -233,6 +233,7 @@ export async function prepareQueuedEditPayload(input: {
         | "reviewComments"
         | "previewAnnotations"
         | "threadContexts"
+        | "environmentContexts"
     ]: Readonly<ComposerThreadDraftState[Key]>;
   };
   readonly uploadFiles: (

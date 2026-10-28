@@ -3,6 +3,8 @@ import {
   formatComposerContextReference,
 } from "@t3tools/shared/composerContextReferences";
 import { describe, expect, it, vi } from "vite-plus/test";
+import { Atom } from "effect/reactivity";
+import { threadComposerErrorsAtom } from "./thread-composer-error";
 vi.mock("../lib/uuid", () => ({ uuidv4: () => "saved-edit" }));
 import {
   ChatAttachmentId,
@@ -18,6 +20,9 @@ import { composerDraftEnvironmentId } from "../lib/composerAttachmentUploadQueue
 import { queuedEditDraftKey } from "./queued-edit-draft-key";
 import {
   beginQueuedRunEdit,
+  activeComposerDraftKey,
+  watchQueuedRunEdit,
+  startQueuedRunEditSave,
   prepareQueuedRunEditDraft,
   canReuseQueuedRunEditDraft,
   recoverQueuedRunEdit,
@@ -362,5 +367,89 @@ describe("resolveQueuedEditPayload", () => {
       vi.clearAllTimers();
       vi.useRealTimers();
     }
+  });
+});
+
+describe("beginQueuedRunEdit", () => {
+  it("recovers a changed edit after a failed save when its run starts offscreen", () => {
+    const threadKey = "env-exit:thread-exit";
+    const runId = RunId.make("run-1");
+    const runs = Atom.make<ReadonlyArray<{ readonly id: RunId; readonly status: string }> | null>([
+      { id: runId, status: "queued" },
+    ]);
+    setComposerDraftText(threadKey, "other work");
+    beginQueuedRunEdit(threadKey, edit([]), []);
+    watchQueuedRunEdit(threadKey, runs);
+    setComposerDraftText(queuedEditDraftKey(threadKey, runId), "changed");
+    const finishSave = startQueuedRunEditSave(threadKey);
+    expect(finishSave).not.toBeNull();
+
+    appAtomRegistry.set(runs, [{ id: runId, status: "running" }]);
+    expect(getQueuedRunEdit(threadKey)?.runId).toBe(runId);
+    expect(finishSave!(false)).toBe(false);
+
+    expect(getQueuedRunEdit(threadKey)).toBeNull();
+    expect(getComposerDraftSnapshot(threadKey).text).toBe("other work");
+    expect(getComposerDraftSnapshot(queuedEditDraftKey(threadKey, runId)).text).toBe("changed");
+    expect(appAtomRegistry.get(threadComposerErrorsAtom)[threadKey]?.message).toBe(
+      "Editing ended. Open Saved queued edit above the composer to recover your changes.",
+    );
+  });
+
+  it("retains a cleared edit when the run starts", () => {
+    const threadKey = "env-exit:thread-cleared";
+    const runId = RunId.make("run-1");
+    const runs = Atom.make<ReadonlyArray<{ readonly id: RunId; readonly status: string }> | null>([
+      { id: runId, status: "queued" },
+    ]);
+    beginQueuedRunEdit(threadKey, edit([]), []);
+    watchQueuedRunEdit(threadKey, runs);
+    setComposerDraftText(queuedEditDraftKey(threadKey, runId), "");
+
+    appAtomRegistry.set(runs, [{ id: runId, status: "running" }]);
+
+    expect(getQueuedRunEdit(threadKey)).toBeNull();
+    expect(getComposerDraftSnapshot(threadKey).text).toBe("");
+    expect(appAtomRegistry.get(threadComposerErrorsAtom)[threadKey]?.message).toBe(
+      "Editing ended. Open Saved queued edit above the composer to recover your changes.",
+    );
+  });
+
+  it("treats a removed server attachment as a change when the run starts", () => {
+    const threadKey = "env-exit:thread-removed";
+    const runId = RunId.make("run-1");
+    const runs = Atom.make<ReadonlyArray<{ readonly id: RunId; readonly status: string }> | null>([
+      { id: runId, status: "queued" },
+    ]);
+    setComposerDraftText(threadKey, "other work");
+    beginQueuedRunEdit(threadKey, edit([image("kept")]), [
+      {
+        ...image("kept"),
+        previewUri: "data:image/png;base64,YWJj",
+        dataUrl: "data:image/png;base64,YWJj",
+      },
+    ]);
+    watchQueuedRunEdit(threadKey, runs);
+    removeComposerDraftAttachment(queuedEditDraftKey(threadKey, runId), "kept");
+
+    appAtomRegistry.set(runs, [{ id: runId, status: "running" }]);
+
+    expect(getQueuedRunEdit(threadKey)).toBeNull();
+    expect(appAtomRegistry.get(threadComposerErrorsAtom)[threadKey]?.message).toBe(
+      "Editing ended. Open Saved queued edit above the composer to recover your changes.",
+    );
+  });
+});
+
+describe("activeComposerDraftKey", () => {
+  const threadKey = "env:thread";
+  const editKey = queuedEditDraftKey(threadKey, RunId.make("run-1"));
+
+  it("keeps a queued edit's draft while that edit is open", () => {
+    expect(activeComposerDraftKey(threadKey, editKey, edit([]))).toBe(editKey);
+  });
+
+  it("falls back to the thread's draft once the edit has ended", () => {
+    expect(activeComposerDraftKey(threadKey, editKey, null)).toBe(threadKey);
   });
 });
