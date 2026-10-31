@@ -19,7 +19,7 @@ import {
 import { queuedRunEditOwnership } from "@t3tools/client-runtime/state/threads";
 import { readLocalApi } from "../../localApi";
 import { scopedThreadKey } from "@t3tools/client-runtime/environment";
-import { ATTACHMENT_ONLY_BOOTSTRAP_PROMPT } from "@t3tools/shared/composerContextReferences";
+import { restoreAttachmentOnlyBootstrapPrompt } from "@t3tools/shared/composerContextReferences";
 import { useShallow } from "zustand/react/shallow";
 import { useEffect, useRef, useState, type RefObject } from "react";
 import { resolveAssetUrl } from "@t3tools/client-runtime/state/assets";
@@ -104,7 +104,7 @@ function watchQueuedEdit(
 }
 
 /** What the composer holds when the user saves a queued-message edit. */
-export interface QueuedRunEditContent {
+interface QueuedRunEditContent {
   readonly prompt: string;
   readonly images: ReadonlyArray<ComposerImageAttachment>;
   readonly files: ReadonlyArray<ComposerFileAttachment>;
@@ -136,7 +136,7 @@ async function submitQueuedRunEdit(input: {
       const reason = fileAttachmentCapabilityBlockReason({
         files,
         attachmentUploadsCapabilityKnown: config !== null,
-        supportsAttachmentUploads: config?.environment.capabilities.attachmentUploads === true,
+        supportsAttachmentUploads: config !== null,
         maxFileAttachmentBytes:
           config?.environment.capabilities.fileAttachments?.maxUploadBytes ?? null,
       });
@@ -163,7 +163,7 @@ async function submitQueuedRunEdit(input: {
         threadId: editing.threadId,
         runId: editing.runId,
         editId: editing.editId,
-        text: editText.length === 0 ? ATTACHMENT_ONLY_BOOTSTRAP_PROMPT : editText,
+        text: restoreAttachmentOnlyBootstrapPrompt(editText, payload.attachments.length > 0),
         edit: {
           messageId: editing.messageId,
           ...payload,

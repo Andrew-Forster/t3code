@@ -1,6 +1,8 @@
 import {
+  ATTACHMENT_ONLY_BOOTSTRAP_PROMPT,
   collectComposerContextReferences,
   formatComposerContextReference,
+  restoreAttachmentOnlyBootstrapPrompt,
 } from "@t3tools/shared/composerContextReferences";
 import { describe, expect, it, vi } from "vite-plus/test";
 import { Atom } from "effect/reactivity";
@@ -371,6 +373,27 @@ describe("resolveQueuedEditPayload", () => {
 });
 
 describe("beginQueuedRunEdit", () => {
+  it.each(["", "Ultrathink:\n"])(
+    "opens attachment-only edits without the placeholder and treats them as untouched (%j)",
+    (prefix) => {
+      const threadKey = `env-exit:attachment-only-${prefix.length}`;
+      const original = { ...edit([]), originalText: prefix + ATTACHMENT_ONLY_BOOTSTRAP_PROMPT };
+      const runs = Atom.make<ReadonlyArray<{ readonly id: RunId; readonly status: string }> | null>(
+        [{ id: original.runId, status: "queued" }],
+      );
+      beginQueuedRunEdit(threadKey, original, []);
+      watchQueuedRunEdit(threadKey, runs);
+      const draft = getComposerDraftSnapshot(queuedEditDraftKey(threadKey, original.runId));
+      expect(draft.text).toBe(prefix.trimEnd());
+      expect(restoreAttachmentOnlyBootstrapPrompt(draft.text, true)).toBe(original.originalText);
+      appAtomRegistry.set(runs, [{ id: original.runId, status: "running" }]);
+      expect(getQueuedRunEdit(threadKey)).toBeNull();
+      expect(appAtomRegistry.get(threadComposerErrorsAtom)[threadKey]?.message).toBe(
+        "The message left the queue or another editor took over.",
+      );
+    },
+  );
+
   it("recovers a changed edit after a failed save when its run starts offscreen", () => {
     const threadKey = "env-exit:thread-exit";
     const runId = RunId.make("run-1");

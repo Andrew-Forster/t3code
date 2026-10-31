@@ -1,4 +1,5 @@
 import {
+  ATTACHMENT_ONLY_BOOTSTRAP_PROMPT,
   collectComposerContextReferences,
   formatComposerContextReference,
 } from "@t3tools/shared/composerContextReferences";
@@ -176,6 +177,38 @@ describe("queued message file edits", () => {
       ],
     ).toBeUndefined();
   });
+
+  it.each(["", "Ultrathink:\n"])(
+    "opens an attachment-only edit without the placeholder and as untouched (%j)",
+    async (prefix) => {
+      await prepareQueuedMessageEditDraft({
+        editTarget,
+        edit,
+        environmentId,
+        text: prefix + ATTACHMENT_ONLY_BOOTSTRAP_PROMPT,
+        attachments: [
+          {
+            type: "image",
+            id: image.id,
+            name: image.name,
+            mimeType: image.mimeType,
+            sizeBytes: image.sizeBytes,
+          },
+        ],
+        readImage: async () => ({ file: image.file, dataUrl: "data:image/png;base64,aW1hZ2U=" }),
+      });
+      const draft = useComposerDraftStore.getState().getComposerDraft(editTarget);
+      expect(draft?.prompt).toBe(prefix.trimEnd());
+      expect(
+        recoverQueuedMessageEdit({
+          editTarget,
+          threadTarget,
+          originalText: draft!.queuedEdit!.originalText,
+          originalAttachmentIds: [image.id],
+        }),
+      ).toBe("clean");
+    },
+  );
 
   it("retains the acquired hold through attachment failure and reload until Cancel succeeds", async () => {
     const store = useComposerDraftStore.getState();
